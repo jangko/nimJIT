@@ -50,3 +50,7 @@ doc
 master
 nimcache
 *.exe
+*.asm
+*.obj
+*.lst
+*.py
