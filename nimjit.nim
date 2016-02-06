@@ -1,4 +1,4 @@
-import strutils
+import strutils, macros
 
 type
   reg8* = enum
@@ -58,7 +58,7 @@ type
     data: string
     
   Assembler* = ref object
-    instructionList: seq[Instruction]
+    instList: seq[Instruction]
     literal: seq[string]
     
 const
@@ -83,7 +83,7 @@ const
   MOD_11 = 0b1100_0000
 
 proc add(ctx: Assembler, inst: Instruction) =
-  ctx.instructionList.add inst
+  ctx.instList.add inst
   
 proc add*(ctx: Assembler, lit: string) =
   ctx.literal.add lit
@@ -91,9 +91,12 @@ proc add*(ctx: Assembler, lit: string) =
 proc len(inst: Instruction): int =
   result = inst.data.len
   
+proc append(ctx: Assembler, imm: char) =
+  ctx.instList[ctx.instList.len-1].data.add imm
+  
 proc newAssembler*(): Assembler = 
   new(result)
-  result.instructionList = @[]
+  result.instList = @[]
   result.literal = @[]
   
 #----------------------LISTING------------------------
@@ -112,7 +115,7 @@ proc listing*(ctx: Assembler, s: File) =
   var line = 1
   var disp = 0
   var lit = 0
-  for inst in ctx.instructionList:
+  for inst in ctx.instList:
     let hex = toHex(inst)
     if hex.len <= 18:
       s.write "$1 $2 $3    $4\n" % [padr(6, line), toHex(disp, 8), hex & repeat(' ', 20 - hex.len), ctx.literal[lit]]
@@ -214,11 +217,11 @@ proc emit(ctx: Assembler, opcode, regmod: int, size: oprSize, opr: reg32, disp: 
       data.add chr(disp)
   elif disp > 0xFF:
     var disp32: uint32 = cast[uint32](disp)
-    var disple = cast[cstring](addr(disp32))
-    data.add disple[0]
-    data.add disple[1]
-    data.add disple[2]
-    data.add disple[3]
+    var dispLE = cast[cstring](addr(disp32))
+    data.add dispLE[0]
+    data.add dispLE[1]
+    data.add dispLE[2]
+    data.add dispLE[3]
     
   var inst = Instruction(data: data)
   ctx.add inst
@@ -268,11 +271,11 @@ proc emit(ctx: Assembler, opcode, regmod: int, size: oprSize, opr: reg64, disp: 
       data.add chr(disp)
   elif disp > 0xFF:
     var disp32: uint32 = cast[uint32](disp)
-    var disple = cast[cstring](addr(disp32))
-    data.add disple[0]
-    data.add disple[1]
-    data.add disple[2]
-    data.add disple[3]
+    var dispLE = cast[cstring](addr(disp32))
+    data.add dispLE[0]
+    data.add dispLE[1]
+    data.add dispLE[2]
+    data.add dispLE[3]
     
   var inst = Instruction(data: data)
   ctx.add inst
@@ -334,11 +337,11 @@ proc emit(ctx: Assembler, opcode, regmod: int, size: oprSize, base, index: reg32
       data.add chr(disp)
   elif disp > 0xFF:
     var disp32: uint32 = cast[uint32](disp)
-    var disple = cast[cstring](addr(disp32))
-    data.add disple[0]
-    data.add disple[1]
-    data.add disple[2]
-    data.add disple[3]
+    var dispLE = cast[cstring](addr(disp32))
+    data.add dispLE[0]
+    data.add dispLE[1]
+    data.add dispLE[2]
+    data.add dispLE[3]
     
   var inst = Instruction(data: data)
   ctx.add inst
@@ -394,59 +397,71 @@ proc emit(ctx: Assembler, opcode, regmod: int, size: oprSize, base, index: reg64
       data.add chr(disp)
   elif disp > 0xFF:
     var disp32: uint32 = cast[uint32](disp)
-    var disple = cast[cstring](addr(disp32))
-    data.add disple[0]
-    data.add disple[1]
-    data.add disple[2]
-    data.add disple[3]
+    var dispLE = cast[cstring](addr(disp32))
+    data.add dispLE[0]
+    data.add dispLE[1]
+    data.add dispLE[2]
+    data.add dispLE[3]
     
   var inst = Instruction(data: data)
   ctx.add inst
-  
-proc neg*(ctx: Assembler, opr: reg8) = ctx.emit(0xF6, 3, opr)
-proc neg*(ctx: Assembler, opr: reg16) = ctx.emit(0xF7, 3, opr)
-proc neg*(ctx: Assembler, opr: reg32) = ctx.emit(0xF7, 3, opr)
-proc neg*(ctx: Assembler, opr: reg64) = ctx.emit(0xF7, 3, opr)
-proc neg*(ctx: Assembler, size: oprSize, opr: reg32, disp: int = 0) = 
-  ctx.emit(0xF6 + (size != BYTE).int, 3, size, opr, disp)
-  
-proc neg*(ctx: Assembler, size: oprSize, opr: reg64, disp: int = 0) = 
-  ctx.emit(0xF6 + (size != BYTE).int, 3, size, opr, disp)
-  
-proc neg*(ctx: Assembler, size: oprSize, base, index: reg32, scale, disp: int = 0) = 
-  ctx.emit(0xF6 + (size != BYTE).int, 3, size, base, index, scale, disp)
 
-proc neg*(ctx: Assembler, size: oprSize, base, index: reg64, scale, disp: int = 0) = 
-  ctx.emit(0xF6 + (size != BYTE).int, 3, size, base, index, scale, disp)
-  
-proc `not`*(ctx: Assembler, opr: reg8) = ctx.emit(0xF6, 2, opr)
-proc `not`*(ctx: Assembler, opr: reg16) = ctx.emit(0xF7, 2, opr)
-proc `not`*(ctx: Assembler, opr: reg32) = ctx.emit(0xF7, 2, opr)
-proc `not`*(ctx: Assembler, opr: reg64) = ctx.emit(0xF7, 2, opr)
-proc `not`*(ctx: Assembler, size: oprSize, opr: reg32, disp: int = 0) = 
-  ctx.emit(0xF6 + (size != BYTE).int, 2, size, opr, disp)
-  
-proc `not`*(ctx: Assembler, size: oprSize, opr: reg64, disp: int = 0) = 
-  ctx.emit(0xF6 + (size != BYTE).int, 2, size, opr, disp)
+macro singleOperandGroup(inst: untyped, opCode, regmod: int): stmt =
+  let opc = opCode.intVal + 1
+  result = quote do:
+    proc `inst`*[T: reg8 | reg16 | reg32 | reg64](ctx: Assembler, opr: T) = 
+      when T is reg8: ctx.emit(`opCode`, `regmod`, opr)
+      else: ctx.emit(`opc`, `regmod`, opr)    
 
-proc `not`*(ctx: Assembler, size: oprSize, base, index: reg32, scale, disp: int = 0) = 
-  ctx.emit(0xF6 + (size != BYTE).int, 2, size, base, index, scale, disp)
+    proc `inst`*[T: reg32 | reg64](ctx: Assembler, size: oprSize, opr: T, disp: int = 0) = 
+      ctx.emit(`opcode` + (size != BYTE).int, `regmod`, size, opr, disp)
 
-proc `not`*(ctx: Assembler, size: oprSize, base, index: reg64, scale, disp: int = 0) = 
-  ctx.emit(0xF6 + (size != BYTE).int, 2, size, base, index, scale, disp)
-  
-proc mul*(ctx: Assembler, opr: reg8) = ctx.emit(0xF6, 4, opr)
-proc mul*(ctx: Assembler, opr: reg16) = ctx.emit(0xF7, 4, opr)
-proc mul*(ctx: Assembler, opr: reg32) = ctx.emit(0xF7, 4, opr)
-proc mul*(ctx: Assembler, opr: reg64) = ctx.emit(0xF7, 4, opr)
-proc mul*(ctx: Assembler, size: oprSize, opr: reg32, disp: int = 0) = 
-  ctx.emit(0xF6 + (size != BYTE).int, 4, size, opr, disp)
-  
-proc mul*(ctx: Assembler, size: oprSize, opr: reg64, disp: int = 0) = 
-  ctx.emit(0xF6 + (size != BYTE).int, 4, size, opr, disp)
+    proc `inst`*[T: reg32 | reg64](ctx: Assembler, size: oprSize, base, index: T, scale, disp: int = 0) = 
+      ctx.emit(`opcode` + (size != BYTE).int, `regmod`, size, base, index, scale, disp)
+    
+singleOperandGroup(inc, 0xFE, 0)
+singleOperandGroup(dec, 0xFE, 1)
+singleOperandGroup(`not`, 0xF6, 2)
+singleOperandGroup(neg, 0xF6, 3)
+singleOperandGroup(mul, 0xF6, 4)
 
-proc mul*(ctx: Assembler, size: oprSize, base, index: reg32, scale, disp: int = 0) = 
-  ctx.emit(0xF6 + (size != BYTE).int, 4, size, base, index, scale, disp)
+macro shiftGroup(inst: untyped, opCode, regmod: int): stmt =
+  let opc = opCode.intVal + 1
+  result = quote do:
+    proc `inst`*[A: reg8 | reg16 | reg32 | reg64, B: int | reg8](ctx: Assembler, opr: A, imm: B) = 
+      when B is int:
+        let ext = if imm == 1: 0x10 else: 0
+        when A is reg8: ctx.emit(`opCode` + ext, `regmod`, opr)
+        else: ctx.emit(`opc` + ext, `regmod`, opr)    
+        if imm != 1: ctx.append chr(imm)
+      else:
+        doAssert(imm == CL)
+        when A is reg8: ctx.emit(`opCode` + 0x12, `regmod`, opr)
+        else: ctx.emit(`opc` + 0x12, `regmod`, opr)
+        
+    proc `inst`*[A: reg32 | reg64, B: int | reg8](ctx: Assembler, size: oprSize, opr: A, disp: int = 0, imm: B) = 
+      when B is int:
+        let ext = if imm == 1: 0x10 else: 0
+        ctx.emit(`opcode` + (size != BYTE).int + ext, `regmod`, size, opr, disp)
+        if imm != 1: ctx.append chr(imm)
+      else:
+        doAssert(imm == CL)
+        ctx.emit(`opcode` + (size != BYTE).int + 0x12, `regmod`, size, opr, disp)
 
-proc mul*(ctx: Assembler, size: oprSize, base, index: reg64, scale, disp: int = 0) = 
-  ctx.emit(0xF6 + (size != BYTE).int, 4, size, base, index, scale, disp)
+    proc `inst`*[A: reg32 | reg64, B: int | reg8](ctx: Assembler, size: oprSize, base, index: A, scale, disp: int = 0, imm: B) = 
+      when B is int:
+        let ext = if imm == 1: 0x10 else: 0
+        ctx.emit(`opcode` + (size != BYTE).int + ext, `regmod`, size, base, index, scale, disp)
+        if imm != 1: ctx.append chr(imm)
+      else:
+        doAssert(imm == CL)
+        ctx.emit(`opcode` + (size != BYTE).int + 0x12, `regmod`, size, base, index, scale, disp)
+      
+shiftGroup(rol, 0xC0, 0)
+shiftGroup(ror, 0xC0, 1)
+shiftGroup(rcl, 0xC0, 2)
+shiftGroup(rcr, 0xC0, 3)
+shiftGroup(sal, 0xC0, 4)
+shiftGroup(`shl`, 0xC0, 4)
+shiftGroup(`shr`, 0xC0, 5)
+shiftGroup(sar, 0xC0, 7)
