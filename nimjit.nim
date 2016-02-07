@@ -82,9 +82,21 @@ proc add*(ctx: Assembler, lit: string) =
 proc len(inst: Instruction): int =
   result = inst.data.len
 
-proc append(ctx: Assembler, imm: char) =
+proc appendChar(ctx: Assembler, imm: char) =
   ctx.instList[ctx.instList.len-1].data.add imm
 
+proc appendWord(ctx: Assembler, imm: int) =
+  var inst = ctx.instList[ctx.instList.len-1]
+  inst.data.add chr(imm and 0xFF)
+  inst.data.add chr((imm and 0xFF00) shr 8)
+    
+proc appendDWord(ctx: Assembler, imm: int) =
+  var inst = ctx.instList[ctx.instList.len-1]
+  inst.data.add chr(imm and 0xFF)
+  inst.data.add chr((imm and 0x0000FF00) shr 8)
+  inst.data.add chr((imm and 0x00FF0000) shr 16)
+  inst.data.add chr((imm and 0xFF000000) shr 24)
+  
 proc newAssembler*(): Assembler =
   new(result)
   result.instList = @[]
@@ -125,8 +137,8 @@ proc listing*(ctx: Assembler, s: File) =
 
 #----------------------LISTING------------------------
 
-proc emit[T: reg8 | reg16 | reg32 | reg64](ctx: Assembler, opcode, regmod: int, opr: T) =
-  var modrm = MOD11 or (regmod shl 3) or (opr.int and 0b0000_0111)
+proc emit[T: reg8 | reg16 | reg32 | reg64](ctx: Assembler, opcode, regMod: int, opr: T) =
+  var modrm = MOD11 or (regMod shl 3) or (opr.int and 0b0000_0111)
   var data = ""
   when T is reg8:
     if opr >= R8B: data.add(chr(REX_BASE or REX_B))
@@ -139,18 +151,18 @@ proc emit[T: reg8 | reg16 | reg32 | reg64](ctx: Assembler, opcode, regmod: int, 
     var rex = REX_BASE or REX_W
     if opr >= R8: rex = rex or REX_B
     data.add chr(rex)
-  
+
   data.add chr(opcode)
   data.add chr(modrm)
   var inst = Instruction(data: data)
   ctx.add inst
 
-proc emit[T: reg32 | reg64](ctx: Assembler, opcode, regmod: int, size: oprSize, opr: T, disp: int) =
+proc emit[T: reg32 | reg64](ctx: Assembler, opcode, regMod: int, size: oprSize, opr: T, disp: int) =
   var data = ""
   var useREX = false
   var rex = REX_BASE
   if size == WORD: data.add chr(0x66)
-  
+
   when T is reg32:
     data.add chr(0x67)
     if opr >= R8D:
@@ -160,7 +172,7 @@ proc emit[T: reg32 | reg64](ctx: Assembler, opcode, regmod: int, size: oprSize, 
     if opr >= R8:
       rex = rex or REX_B
       useREX = true
-      
+
   if size == QWORD:
     rex = rex or REX_W
     useREX = true
@@ -171,13 +183,95 @@ proc emit[T: reg32 | reg64](ctx: Assembler, opcode, regmod: int, size: oprSize, 
   if disp == 0: modrm = MOD_00
   elif disp > 0 and disp <= 0xFF: modrm = MOD_01
   elif disp > 0xFF: modrm = MOD_10
-  modrm = modrm or (regmod shl 3) or (opr.int and 0b0000_0111)
+  modrm = modrm or (regMod shl 3) or (opr.int and 0b0000_0111)
 
   if (opr.int and 0b0000_0111) == 0b00_000_101:
     #EBP/R13D special case
     #transform it into opcode [reg + 0] using disp 0
     if disp >= 0 and disp <= 0xFF:
-      modrm = MOD_01 or (regmod shl 3) or (opr.int and 0b0000_0111)
+      modrm = MOD_01 or (regMod shl 3) or (opr.int and 0b0000_0111)
+      data.add chr(modrm)
+      data.add chr(disp)
+    else:
+      data.add chr(modrm)
+  elif (opr.int and 0b0000_0111) == 0b00_000_100:
+    #ESP/R12D special case
+    #transform it into opcode [reg * 0] using SIB
+    data.add chr(modrm)
+    data.add chr(0x24)
+  else:
+    data.add chr(modrm)
+
+  if disp > 0 and disp <= 0xFF:
+    if (opr.int and 0b0000_0111) != 0b00_000_101:
+      data.add chr(disp)
+  elif disp > 0xFF:
+    var disp32: uint32 = cast[uint32](disp)
+    var dispLE = cast[cstring](addr(disp32))
+    data.add dispLE[0]
+    data.add dispLE[1]
+    data.add dispLE[2]
+    data.add dispLE[3]
+
+  var inst = Instruction(data: data)
+  ctx.add inst
+
+proc emit[T: reg32 | reg64, TT: reg8 | reg16 | reg32 | reg64](ctx: Assembler, opcode: int, 
+  size: oprSize, opr: T, disp: int, opr2: TT) =
+  var data = ""
+  var useREX = false
+  var rex = REX_BASE
+  if size == WORD: data.add chr(0x66)
+
+  when T is reg32:
+    data.add chr(0x67)
+    if opr >= R8D:
+      rex = rex or REX_B
+      useREX = true
+  else:
+    if opr >= R8:
+      rex = rex or REX_B
+      useREX = true
+
+  if size == QWORD:
+    rex = rex or REX_W
+    useREX = true
+  
+  when TT is reg8:
+    if opr2 >= R8B:
+      rex = rex or REX_R
+      useREX = true
+  elif TT is reg16:
+    if opr2 >= R8W:
+      rex = rex or REX_R
+      useREX = true
+  elif TT is reg32:
+    if opr2 >= R8D:
+      rex = rex or REX_R
+      useREX = true
+  else:
+    if opr2 >= R8:
+      rex = rex or REX_R
+      useREX = true
+
+  when T is reg64 and TT is reg8:
+    doAssert(not (opr2 in {AH, CH, DH, BH} and useREX))
+  elif T is reg32 and TT is reg8:
+    doAssert(not (opr2 in {AH, CH, DH, BH} and useREX))
+          
+  if useREX: data.add chr(rex)
+  data.add chr(opcode)
+  var modrm = 0
+  if disp == 0: modrm = MOD_00
+  elif disp > 0 and disp <= 0xFF: modrm = MOD_01
+  elif disp > 0xFF: modrm = MOD_10
+  modrm = modrm or ((opr2.int and 0b0000_0111) shl 3) or (opr.int and 0b0000_0111)
+
+  if (opr.int and 0b0000_0111) == 0b00_000_101:
+    #EBP/R13D special case
+    #transform it into opcode [reg + 0] using disp 0
+    if disp >= 0 and disp <= 0xFF:
+      modrm = MOD_01 or ((opr2.int and 0b0000_0111) shl 3) or (opr.int and 0b0000_0111)
       data.add chr(modrm)
       data.add chr(disp)
     else:
@@ -211,22 +305,22 @@ proc scaleToScale(scale: int): int =
   of 8: result = 0b1100_0000
   else: result = 0x00
 
-proc emit[T: reg32 | reg64](ctx: Assembler, opcode, regmod: int, size: oprSize, base, index: T, scale, disp: int) =
+proc emit[T: reg32 | reg64](ctx: Assembler, opcode, regMod: int, size: oprSize, base, index: T, scale, disp: int) =
   var data = ""
   var useREX = false
   var rex = REX_BASE
   doAssert(scale in {1, 2, 4, 8})
-  
+
   when T is reg32:
     doAssert(index != ESP)
   else:
     doAssert(index != RSP)
 
   if size == WORD: data.add chr(0x66)
-  
+
   when T is reg32:
     data.add chr(0x67)
-    
+
     if base >= R8D:
       rex = rex or REX_B
       useREX = true
@@ -253,13 +347,13 @@ proc emit[T: reg32 | reg64](ctx: Assembler, opcode, regmod: int, size: oprSize, 
   if disp == 0: modrm = MOD_00
   elif disp > 0 and disp <= 0xFF: modrm = MOD_01
   elif disp > 0xFF: modrm = MOD_10
-  modrm = modrm or (regmod shl 3) or 0b0000_0100
+  modrm = modrm or (regMod shl 3) or 0b0000_0100
   var sib = scaleToScale(scale) or ((index.int and 0b0000_0111) shl 3) or (base.int and 0b0000_0111)
 
   if (base.int and 0b0000_0111) == 0b00_000_101:
     #EBP/R13D special case
     if disp >= 0 and disp <= 0xFF:
-      modrm = MOD_01 or (regmod shl 3) or 0b0000_0100
+      modrm = MOD_01 or (regMod shl 3) or 0b0000_0100
       data.add chr(modrm)
       data.add chr(sib)
       data.add chr(disp)
@@ -285,18 +379,115 @@ proc emit[T: reg32 | reg64](ctx: Assembler, opcode, regmod: int, size: oprSize, 
   var inst = Instruction(data: data)
   ctx.add inst
 
-macro singleOperandGroup(inst: untyped, opCode, regmod: int): stmt =
+proc emit[T: reg32 | reg64, TT: reg8 | reg16 | reg32 | reg64](ctx: Assembler, opcode: int, 
+  size: oprSize, base, index: T, scale, disp: int, opr2: TT) =
+  var data = ""
+  var useREX = false
+  var rex = REX_BASE
+  doAssert(scale in {1, 2, 4, 8})
+
+  when T is reg32:
+    doAssert(index != ESP)
+  else:
+    doAssert(index != RSP)
+
+  if size == WORD: data.add chr(0x66)
+
+  when T is reg32:
+    data.add chr(0x67)
+
+    if base >= R8D:
+      rex = rex or REX_B
+      useREX = true
+
+    if index >= R8D:
+      rex = rex or REX_X
+      useREX = true
+  else:
+    if base >= R8:
+      rex = rex or REX_B
+      useREX = true
+
+    if index >= R8:
+      rex = rex or REX_X
+      useREX = true
+
+  if size == QWORD:
+    rex = rex or REX_W
+    useREX = true
+
+  when TT is reg8:
+    if opr2 >= R8B:
+      rex = rex or REX_R
+      useREX = true
+  elif TT is reg16:
+    if opr2 >= R8W:
+      rex = rex or REX_R
+      useREX = true
+  elif TT is reg32:
+    if opr2 >= R8D:
+      rex = rex or REX_R
+      useREX = true
+  else:
+    if opr2 >= R8:
+      rex = rex or REX_R
+      useREX = true
+  
+  when T is reg64 and TT is reg8:
+    doAssert(not (opr2 in {AH, CH, DH, BH} and useREX))
+  elif T is reg32 and TT is reg8:
+    doAssert(not (opr2 in {AH, CH, DH, BH} and useREX))
+  
+  if useREX: data.add chr(rex)
+  data.add chr(opcode)
+  var modrm = 0
+  if disp == 0: modrm = MOD_00
+  elif disp > 0 and disp <= 0xFF: modrm = MOD_01
+  elif disp > 0xFF: modrm = MOD_10
+  modrm = modrm or ((opr2.int and 0b0000_0111) shl 3) or 0b0000_0100
+  var sib = scaleToScale(scale) or ((index.int and 0b0000_0111) shl 3) or (base.int and 0b0000_0111)
+
+  if (base.int and 0b0000_0111) == 0b00_000_101:
+    #EBP/R13D special case
+    if disp >= 0 and disp <= 0xFF:
+      modrm = MOD_01 or ((opr2.int and 0b0000_0111) shl 3) or 0b0000_0100
+      data.add chr(modrm)
+      data.add chr(sib)
+      data.add chr(disp)
+    else:
+      data.add chr(modrm)
+      data.add chr(sib)
+  else:
+    data.add chr(modrm)
+
+  if(base.int and 0b0000_0111) != 0b00_000_101: data.add chr(sib)
+
+  if disp > 0 and disp <= 0xFF:
+    if (base.int and 0b0000_0111) != 0b00_000_101:
+      data.add chr(disp)
+  elif disp > 0xFF:
+    var disp32: uint32 = cast[uint32](disp)
+    var dispLE = cast[cstring](addr(disp32))
+    data.add dispLE[0]
+    data.add dispLE[1]
+    data.add dispLE[2]
+    data.add dispLE[3]
+
+  var inst = Instruction(data: data)
+  ctx.add inst
+
+macro singleOperandGroup(inst: untyped, opCode, regMod: int): stmt =
   let opc = opCode.intVal + 1
   result = quote do:
     proc `inst`*[T: reg8 | reg16 | reg32 | reg64](ctx: Assembler, opr: T) =
-      when T is reg8: ctx.emit(`opCode`, `regmod`, opr)
-      else: ctx.emit(`opc`, `regmod`, opr)
+      when T is reg8: ctx.emit(`opCode`, `regMod`, opr)
+      else: ctx.emit(`opc`, `regMod`, opr)
 
     proc `inst`*[T: reg32 | reg64](ctx: Assembler, size: oprSize, opr: T, disp: int = 0) =
-      ctx.emit(`opcode` + (size != BYTE).int, `regmod`, size, opr, disp)
+      ctx.emit(`opcode` + (size != BYTE).int, `regMod`, size, opr, disp)
 
     proc `inst`*[T: reg32 | reg64](ctx: Assembler, size: oprSize, base, index: T, scale, disp: int = 0) =
-      ctx.emit(`opcode` + (size != BYTE).int, `regmod`, size, base, index, scale, disp)
+      ctx.emit(`opcode` + (size != BYTE).int, `regMod`, size, base, index, scale, disp)
 
 singleOperandGroup(inc, 0xFE, 0)
 singleOperandGroup(dec, 0xFE, 1)
@@ -304,37 +495,37 @@ singleOperandGroup(`not`, 0xF6, 2)
 singleOperandGroup(neg, 0xF6, 3)
 singleOperandGroup(mul, 0xF6, 4)
 
-macro shiftGroup(inst: untyped, opCode, regmod: int): stmt =
+macro shiftGroup(inst: untyped, opCode, regMod: int): stmt =
   let opc = opCode.intVal + 1
   result = quote do:
     proc `inst`*[A: reg8 | reg16 | reg32 | reg64, B: int | reg8](ctx: Assembler, opr: A, imm: B) =
       when B is int:
         let ext = if imm == 1: 0x10 else: 0
-        when A is reg8: ctx.emit(`opCode` + ext, `regmod`, opr)
-        else: ctx.emit(`opc` + ext, `regmod`, opr)
-        if imm != 1: ctx.append chr(imm)
+        when A is reg8: ctx.emit(`opCode` + ext, `regMod`, opr)
+        else: ctx.emit(`opc` + ext, `regMod`, opr)
+        if imm != 1: ctx.appendChar chr(imm)
       else:
         doAssert(imm == CL)
-        when A is reg8: ctx.emit(`opCode` + 0x12, `regmod`, opr)
-        else: ctx.emit(`opc` + 0x12, `regmod`, opr)
+        when A is reg8: ctx.emit(`opCode` + 0x12, `regMod`, opr)
+        else: ctx.emit(`opc` + 0x12, `regMod`, opr)
 
     proc `inst`*[A: reg32 | reg64, B: int | reg8](ctx: Assembler, size: oprSize, opr: A, disp: int = 0, imm: B) =
       when B is int:
         let ext = if imm == 1: 0x10 else: 0
-        ctx.emit(`opcode` + (size != BYTE).int + ext, `regmod`, size, opr, disp)
-        if imm != 1: ctx.append chr(imm)
+        ctx.emit(`opcode` + (size != BYTE).int + ext, `regMod`, size, opr, disp)
+        if imm != 1: ctx.appendChar chr(imm)
       else:
         doAssert(imm == CL)
-        ctx.emit(`opcode` + (size != BYTE).int + 0x12, `regmod`, size, opr, disp)
+        ctx.emit(`opcode` + (size != BYTE).int + 0x12, `regMod`, size, opr, disp)
 
     proc `inst`*[A: reg32 | reg64, B: int | reg8](ctx: Assembler, size: oprSize, base, index: A, scale, disp: int = 0, imm: B) =
       when B is int:
         let ext = if imm == 1: 0x10 else: 0
-        ctx.emit(`opcode` + (size != BYTE).int + ext, `regmod`, size, base, index, scale, disp)
-        if imm != 1: ctx.append chr(imm)
+        ctx.emit(`opcode` + (size != BYTE).int + ext, `regMod`, size, base, index, scale, disp)
+        if imm != 1: ctx.appendChar chr(imm)
       else:
         doAssert(imm == CL)
-        ctx.emit(`opcode` + (size != BYTE).int + 0x12, `regmod`, size, base, index, scale, disp)
+        ctx.emit(`opcode` + (size != BYTE).int + 0x12, `regMod`, size, base, index, scale, disp)
 
 shiftGroup(rol, 0xC0, 0)
 shiftGroup(ror, 0xC0, 1)
@@ -344,3 +535,143 @@ shiftGroup(sal, 0xC0, 4)
 shiftGroup(`shl`, 0xC0, 4)
 shiftGroup(`shr`, 0xC0, 5)
 shiftGroup(sar, 0xC0, 7)
+
+macro arithGroup(inst: untyped, opMod, regMod: int): stmt =
+  result = quote do:
+    proc `inst`*[T: reg8 | reg16 | reg32 | reg64](ctx: Assembler, opr: T, imm: int) =
+      when T is reg8:
+        if opr == AL:
+          var data = ""
+          data.add chr(0x04 + `opMod`)
+          var inst = Instruction(data: data)
+          ctx.add inst
+        else:
+          ctx.emit(0x80, `regMod`, opr)
+        doAssert(imm <= 0xFF)
+        ctx.appendChar chr(imm and 0xFF)
+      elif T is reg16:
+        if imm >= 0 and imm < 0xFF:
+          ctx.emit(0x83, `regMod`, opr)
+          ctx.appendChar chr(imm and 0xFF)
+        else:
+          if opr == AX:
+            var data = "\x66"
+            data.add chr(0x05 + `opMod`)
+            var inst = Instruction(data: data)
+            ctx.add inst
+          else:
+            ctx.emit(0x81, `regMod`, opr)
+          doAssert(imm <= 0xFFFF)
+          ctx.appendWord(imm and 0xFFFF)
+      elif T is reg32:
+        if imm >= 0 and imm < 0xFF:
+          ctx.emit(0x83, `regMod`, opr)
+          ctx.appendChar chr(imm and 0xFF)
+        else:
+          if opr == EAX:
+            var data = ""
+            data.add chr(0x05 + `opMod`)
+            var inst = Instruction(data: data)
+            ctx.add inst
+          else:
+            ctx.emit(0x81, `regMod`, opr)
+          doAssert(imm <= 0xFFFFFFFF)
+          ctx.appendDWord(imm and 0xFFFFFFFF)
+      else:
+        if imm >= 0 and imm < 0xFF:
+          ctx.emit(0x83, `regMod`, opr)
+          ctx.appendChar chr(imm and 0xFF)
+        else:
+          if opr == RAX:
+            var data = ""
+            var rex = REX_BASE or REX_W
+            if opr >= R8: rex = rex or REX_B
+            data.add chr(rex)
+            data.add chr(0x05 + `opMod`)
+            var inst = Instruction(data: data)
+            ctx.add inst
+          else:
+            ctx.emit(0x81, `regMod`, opr)
+          doAssert(imm <= 0xFFFFFFFF)
+          ctx.appendDWord(imm and 0xFFFFFFFF)
+
+    proc `inst`*[T: reg32 | reg64](ctx: Assembler, size: oprSize, opr: T, disp: int = 0, imm: int) =
+      ctx.emit(0x80 + (size != BYTE).int, `regMod`, size, opr, disp)
+      if size == BYTE:
+        doAssert(imm <= 0xFF)
+        ctx.appendChar chr(imm and 0xFF)
+      elif size == WORD:
+        doAssert(imm <= 0xFFFF)
+        ctx.appendWord(imm and 0xFFFF)
+      else:
+        doAssert(imm <= 0xFFFFFFFF)
+        ctx.appendDWord(imm and 0xFFFFFFFF)
+    
+    proc `inst`*[T: reg32 | reg64, TT: reg8 | reg16 | reg32 | reg64](ctx: Assembler, size: oprSize, 
+      opr1: T, disp: int, opr2: TT) =
+      when TT is reg8:
+        doAssert(size == BYTE)
+      elif TT is reg16:
+        doAssert(size == WORD)
+      elif TT is reg32:
+        doAssert(size == DWORD)
+      else:
+        doAssert(size == QWORD)
+      ctx.emit(0x00 + (size != BYTE).int + `opMod`, size, opr1, disp, opr2)
+      
+    proc `inst`*[T: reg32 | reg64, TT: reg8 | reg16 | reg32 | reg64](ctx: Assembler, opr1: TT, 
+      size: oprSize, opr2: T, disp: int = 0) =
+      when TT is reg8:
+        doAssert(size == BYTE)
+      elif TT is reg16:
+        doAssert(size == WORD)
+      elif TT is reg32:
+        doAssert(size == DWORD)
+      else:
+        doAssert(size == QWORD)
+      ctx.emit(0x02 + (size != BYTE).int + `opMod`, size, opr2, disp, opr1)
+      
+    proc `inst`*[T: reg32 | reg64](ctx: Assembler, size: oprSize, base, index: T, scale, disp: int = 0, imm: int) =
+      ctx.emit(0x80 + (size != BYTE).int, `regMod`, size, base, index, scale, disp)
+      if size == BYTE:
+        doAssert(imm <= 0xFF)
+        ctx.appendChar chr(imm and 0xFF)
+      elif size == WORD:
+        doAssert(imm <= 0xFFFF)
+        ctx.appendWord(imm and 0xFFFF)
+      else:
+        doAssert(imm <= 0xFFFFFFFF)
+        ctx.appendDWord(imm and 0xFFFFFFFF)
+      
+    proc `inst`*[T: reg32 | reg64, TT: reg8 | reg16 | reg32 | reg64](ctx: Assembler, size: oprSize, 
+      base, index: T, scale, disp: int = 0, opr2: TT) =
+      when TT is reg8:
+        doAssert(size == BYTE)
+      elif TT is reg16:
+        doAssert(size == WORD)
+      elif TT is reg32:
+        doAssert(size == DWORD)
+      else:
+        doAssert(size == QWORD)
+      ctx.emit(0x00 + (size != BYTE).int + `opMod`, size, base, index, scale, disp, opr2)
+    
+    proc `inst`*[T: reg32 | reg64, TT: reg8 | reg16 | reg32 | reg64](ctx: Assembler, opr1: TT, 
+      size: oprSize, base, index: T, scale, disp: int = 0) =
+      when TT is reg8:
+        doAssert(size == BYTE)
+      elif TT is reg16:
+        doAssert(size == WORD)
+      elif TT is reg32:
+        doAssert(size == DWORD)
+      else:
+        doAssert(size == QWORD)
+      ctx.emit(0x02 + (size != BYTE).int + `opMod`, size, base, index, scale, disp, opr1)
+    
+arithGroup(add, 0x00, 0)
+arithGroup(`or`, 0x08, 1)
+arithGroup(adc, 0x10, 2)
+arithGroup(sbb, 0x18, 3)
+arithGroup(`and`,0x20, 4)
+arithGroup(sub, 0x28, 5)
+arithGroup(`xor`, 0x30, 6)
+arithGroup(cmp, 0x38, 7)
