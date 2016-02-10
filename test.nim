@@ -60,7 +60,7 @@ proc open(ctx: TestContext) =
   ctx.nim.write "if not open(output, paramStr(1), fmWrite):\n"
   ctx.nim.write "  echo \"cannot open \" & paramStr(1)\n"
   ctx.nim.write "  quit(-1)\n"
-  ctx.nim.write "var ctx = newAssembler($1)\n" % [$ctx.bits]
+  ctx.nim.write "var ctx = newAssembler($1, true)\n" % [$ctx.bits]
 
 proc close(ctx: TestContext) =
   ctx.nim.write "ctx.listing(output)\n"
@@ -138,7 +138,7 @@ proc testSuite(bits: asmFlag) =
   #ctx.genShift("shl", "`shl`")
   #ctx.genShift("shr", "`shr`")
   #ctx.genShift("sar", "sar")
-  #
+  
   #ctx.genArith("add", "add")
   #ctx.genArith("or", "`or`")
   #ctx.genArith("adc", "adc")
@@ -148,8 +148,8 @@ proc testSuite(bits: asmFlag) =
   #ctx.genArith("xor", "`xor`")
   #ctx.genArith("cmp", "cmp")
 
-  #ctx.genPushPop("pop", "pop")
-  #ctx.genPushPop("push", "push")
+  ctx.genPushPop("pop", "pop")
+  ctx.genPushPop("push", "push")
 
 testSuite(BITS64)
 testSuite(BITS32)

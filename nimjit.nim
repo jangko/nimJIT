@@ -61,7 +61,8 @@ type
     instList: seq[Instruction]
     literal: seq[string]
     bits: asmFlag
-
+    genListing: bool
+        
 const
   SPL* = AH
   BPL* = CH
@@ -187,11 +188,12 @@ proc appendDWord(ctx: Assembler, imm: int) =
   inst.data.add chr((imm and 0x00FF0000) shr 16)
   inst.data.add chr((imm and 0xFF000000) shr 24)
 
-proc newAssembler*(bits: asmFlag): Assembler =
+proc newAssembler*(bits: asmFlag, genListing: bool = false): Assembler =
   new(result)
   result.instList = @[]
   result.literal = @[]
   result.bits = bits
+  result.genListing = genListing
 
 proc getRegType*(opr: TReg): regType {.inline.} =
   result = regType((opr.int and 0xFF00) shr 8)
@@ -527,13 +529,122 @@ template reg8p1(opr: TReg): expr =
 proc isReg(opr: TReg, typ: regType, regVal: int): bool =
   result = getRegType(opr) == typ and getRegVal(opr) == regVal
 
-#322
-#486
+proc deacc(n: NimNode): string {.compileTime.} =
+  if n.kind == nnkAccQuoted: result = $n[0]
+  else: result = $n
 
+proc toStr(opr: TReg): string =
+  let val = getRegVal(opr)
+  case getRegType(opr)
+  of REG8: result = $reg8(val)
+  of REG16: result = $reg16(val)    
+  of REG32: result = $reg32(val)
+  of REG64: result = $reg64(val)
+  of REGXMM: result = $regxmm(val)
+  of REGYMM: result = $regymm(val)
+  of REGCR: result = $regcr(val)
+  of REGDR: result = $regdr(val)
+  of REGFPU: result = $regfpu(val)
+  of REGMMX: result = $regmmx(val)
+  of REGSEG: result = $regseg(val)
+
+proc toStr(opr: int): string =
+  result = $opr
+  
+proc lit(ctx: Assembler, ins: string, opr: TReg) =
+  if not ctx.genListing: return
+  ctx.add "$1 $2" % [ins, toStr(opr)]
+
+proc lit(ctx: Assembler, ins: string) =
+  if not ctx.genListing: return
+  ctx.add ins
+  
+proc lit(ctx: Assembler, ins: string, imm: int) =
+  if not ctx.genListing: return
+  ctx.add "$1 $2" % [ins, toStr(imm)]
+  
+proc lit(ctx: Assembler, ins: string, size: oprSize, opr: TReg, disp: int) =
+  if not ctx.genListing: return
+  if disp == 0:
+    ctx.add "$1 $2 [$3]" % [ins, toLower($size), toStr(opr)]
+  else:
+    ctx.add "$1 $2 [$3 + $4]" % [ins, toLower($size), toStr(opr), $disp]
+
+proc lit(ctx: Assembler, ins: string, size: oprSize, base, index: TReg, scale, disp: int) =
+  if not ctx.genListing: return
+  if disp == 0:
+    if scale == 0:
+      ctx.add "$1 $2 [$3 + $4]" % [ins, toLower($size), toStr(base), toStr(index)]
+    else:
+      ctx.add "$1 $2 [$3 + $4 * $5]" % [ins, toLower($size), toStr(base), toStr(index), $scale]
+  else:
+    if scale == 0:
+      ctx.add "$1 $2 [$3 + $4 + $5]" % [ins, toLower($size), toStr(base), toStr(index), $disp]
+    else:
+      ctx.add "$1 $2 [$3 + $4 * $5 + $6]" % [ins, toLower($size), toStr(base), toStr(index), $scale, $disp]
+      
+proc lit[B: int | TReg](ctx: Assembler, ins: string, opr: TReg, imm: B) =
+  if not ctx.genListing: return
+  ctx.add "$1 $2, $3" % [ins, toStr(opr), toStr(imm)]  
+
+proc lit2[B: int | TReg](ctx: Assembler, ins: string, opr: TReg, imm: B) =
+  if not ctx.genListing: return
+  when B is int:
+    var size = ""
+    let oprType = getRegType(opr)
+    if oprType == REG8: size = "byte"
+    elif oprType == REG16: size = "word"
+    elif oprType == REG32: size = "dword"
+  else:
+    let size = ""
+  ctx.add "$1 $2, $3 $4" % [ins, toStr(opr), size, toStr(imm)] 
+  
+proc lit[B: int | TReg](ctx: Assembler, ins: string, size: oprSize, opr: TReg, disp: int, imm: B) =
+  if not ctx.genListing: return
+  if disp == 0:
+    ctx.add "$1 $2 [$3], $4" % [ins, toLower($size), toStr(opr), toStr(imm)]
+  else:
+    ctx.add "$1 $2 [$3 + $4], $5" % [ins, toLower($size), toStr(opr), $disp, toStr(imm)]
+    
+proc lit[B: int | TReg](ctx: Assembler, ins: string, size: oprSize, base, index: TReg, scale, disp: int, imm: B) =
+  if not ctx.genListing: return
+  if disp == 0:
+    if scale == 0:
+      ctx.add "$1 $2 [$3 + $4], $5" % [ins, toLower($size), toStr(base), toStr(index), toStr(imm)]
+    else:
+      ctx.add "$1 $2 [$3 + $4 * $5], $6" % [ins, toLower($size), toStr(base), toStr(index), $scale, toStr(imm)]
+  else:
+    if scale == 0:
+      ctx.add "$1 $2 [$3 + $4 + $5], $6" % [ins, toLower($size), toStr(base), toStr(index), $disp, toStr(imm)]
+    else:
+      ctx.add "$1 $2 [$3 + $4 * $5 + $6], $7" % [ins, toLower($size), toStr(base), toStr(index), $scale, $disp, toStr(imm)]
+
+proc lit(ctx: Assembler, ins: string, opr1, opr2: TReg, size: oprSize, disp: int) =
+  if not ctx.genListing: return
+  if disp == 0:
+    ctx.add "$1 $2, $3 [$4]" % [ins, toStr(opr1), toLower($size), toStr(opr2)]
+  else:
+    ctx.add "$1 $2, $3 [$4 + $5]" % [ins, toStr(opr1), toLower($size), toStr(opr2), $disp]
+
+proc lit(ctx: Assembler, ins: string, opr: TReg, size: oprSize, base, index: TReg, scale, disp: int) =
+  if not ctx.genListing: return
+  if disp == 0:
+    if scale == 0:
+      ctx.add "$1 $5, $2 [$3 + $4]" % [ins, toLower($size), toStr(base), toStr(index), toStr(opr)]
+    else:
+      ctx.add "$1 $6, $2 [$3 + $4 * $5]" % [ins, toLower($size), toStr(base), toStr(index), $scale, toStr(opr)]
+  else:
+    if scale == 0:
+      ctx.add "$1 $6, $2 [$3 + $4 + $5]" % [ins, toLower($size), toStr(base), toStr(index), $disp, toStr(opr)]
+    else:
+      ctx.add "$1 $7, $2 [$3 + $4 * $5 + $6]" % [ins, toLower($size), toStr(base), toStr(index), $scale, $disp, toStr(opr)]
+    
 macro singleOperandGroup(inst: untyped, opCode, regMod: int, opCode2: int = 0): stmt =
-  if opCode.intVal != 0:
+  let ins = inst.deacc
+  if opCode2.intVal != 0:
     result = quote do:
       proc `inst`*(ctx: Assembler, opr: TReg) =
+        ctx.lit(`ins`, opr)
         let rt = getRegType(opr)
         doAssert(rt in {REG8, REG16, REG32, REG64})
         if rt in {REG16, REG32} and ctx.bits == BITS32:
@@ -548,15 +659,18 @@ macro singleOperandGroup(inst: untyped, opCode, regMod: int, opCode2: int = 0): 
   else:
     result = quote do:
       proc `inst`*(ctx: Assembler, opr: TReg) =
+        ctx.lit(`ins`, opr)
         doAssert(getRegType(opr) in {REG8, REG16, REG32, REG64})
         ctx.emit(`opCode` + reg8p1(opr), `regMod`, opr)
 
   result.add quote do:
     proc `inst`*(ctx: Assembler, size: oprSize, opr: TReg, disp: int = 0) =
+      ctx.lit(`ins`, size, opr, disp)
       doAssert(getRegType(opr) in {REG32, REG64})
       ctx.emit(`opcode` + (size != BYTE).int, `regMod`, size, opr, disp)
 
     proc `inst`*(ctx: Assembler, size: oprSize, base, index: TReg, scale, disp: int = 0) =
+      ctx.lit(`ins`, size, base, index, scale, disp)
       doAssert(getRegType(base) in {REG32, REG64})
       doAssert(getRegType(index) in {REG32, REG64})
       ctx.emit(`opcode` + (size != BYTE).int, `regMod`, size, base, index, scale, disp)
@@ -568,8 +682,10 @@ singleOperandGroup(neg, 0xF6, 3)
 singleOperandGroup(mul, 0xF6, 4)
 
 macro shiftGroup(inst: untyped, opCode, regMod: int): stmt =
+  let ins = inst.deacc
   result = quote do:
     proc `inst`*[B: int | TReg](ctx: Assembler, opr: TReg, imm: B) =
+      ctx.lit(`ins`, opr, imm)
       doAssert(getRegType(opr) in {REG8, REG16, REG32, REG64})
       when B is int:
         doAssert(imm >= 0 and imm <= 0xFF)
@@ -581,6 +697,7 @@ macro shiftGroup(inst: untyped, opCode, regMod: int): stmt =
         ctx.emit(`opCode` + 0x12 + reg8p1(opr), `regMod`, opr)
 
     proc `inst`*[B: int | TReg](ctx: Assembler, size: oprSize, opr: TReg, disp: int = 0, imm: B) =
+      ctx.lit(`ins`, size, opr, disp, imm)
       doAssert(getRegType(opr) in {REG32, REG64})
       when B is int:
         doAssert(imm >= 0 and imm <= 0xFF)
@@ -592,6 +709,7 @@ macro shiftGroup(inst: untyped, opCode, regMod: int): stmt =
         ctx.emit(`opcode` + (size != BYTE).int + 0x12, `regMod`, size, opr, disp)
 
     proc `inst`*[B: int | TReg](ctx: Assembler, size: oprSize, base, index: TReg, scale, disp: int = 0, imm: B) =
+      ctx.lit(`ins`, size, base, index, scale, disp, imm)
       doAssert(getRegType(base) in {REG32, REG64})
       doAssert(getRegType(index) in {REG32, REG64})
       when B is int:
@@ -613,8 +731,10 @@ shiftGroup(`shr`, 0xC0, 5)
 shiftGroup(sar, 0xC0, 7)
 
 macro arithGroup(inst: untyped, opMod, regMod: int): stmt =
+  let ins = inst.deacc
   result = quote do:
     proc `inst`*(ctx: Assembler, opr: TReg, imm: int) =
+      
       let oprVal = opr.int and 0xFF
       let oprType = regType((opr.int and 0xFF00) shr 8)
       if oprType == REG8:
@@ -627,11 +747,14 @@ macro arithGroup(inst: untyped, opMod, regMod: int): stmt =
           ctx.emit(0x80, `regMod`, opr)
         doAssert(imm <= 0xFF)
         ctx.appendChar chr(imm and 0xFF)
+        ctx.lit2(`ins`, opr, imm)
       else:
         if imm >= 0 and imm < 0xFF:
+          ctx.lit2(`ins`, opr, imm)
           ctx.emit(0x83, `regMod`, opr)
           ctx.appendChar chr(imm and 0xFF)
         else:
+          ctx.lit(`ins`, opr, imm)
           if oprVal == 0x00: # AX, EAX, RAX
             var data = ""
             if oprType == REG16:
@@ -653,6 +776,7 @@ macro arithGroup(inst: untyped, opMod, regMod: int): stmt =
             ctx.appendDWord(imm and 0xFFFFFFFF)
 
     proc `inst`*(ctx: Assembler, size: oprSize, opr: TReg, disp: int = 0, imm: int) =
+      ctx.lit(`ins`, size, opr, disp, imm)
       doAssert(getRegType(opr) in {REG32, REG64})
       ctx.emit(0x80 + (size != BYTE).int, `regMod`, size, opr, disp)
       if size == BYTE:
@@ -666,6 +790,7 @@ macro arithGroup(inst: untyped, opMod, regMod: int): stmt =
         ctx.appendDWord(imm and 0xFFFFFFFF)
 
     proc `inst`*(ctx: Assembler, size: oprSize, opr1: TReg, disp: int, opr2: TReg) =
+      ctx.lit(`ins`, size, opr1, disp, opr2)
       let opr2Type = getRegType(opr2)
       doAssert(getRegType(opr1) in {REG32, REG64})
       doAssert(opr2Type in {REG8, REG16, REG32, REG64})
@@ -675,7 +800,8 @@ macro arithGroup(inst: untyped, opMod, regMod: int): stmt =
       else: doAssert(size == QWORD)
       ctx.emit(0x00 + (size != BYTE).int + `opMod`, size, opr1, disp, opr2)
 
-    proc `inst`*(ctx: Assembler, opr1: TReg, size: oprSize, opr2: TReg, disp: int = 0) =
+    proc `inst`*(ctx: Assembler, opr1, opr2: TReg, size: oprSize, disp: int) =
+      ctx.lit(`ins`, opr1, opr2, size, disp)
       let opr2Type = getRegType(opr2)
       doAssert(getRegType(opr1) in {REG32, REG64})
       doAssert(opr2Type in {REG8, REG16, REG32, REG64})
@@ -685,7 +811,8 @@ macro arithGroup(inst: untyped, opMod, regMod: int): stmt =
       else: doAssert(size == QWORD)
       ctx.emit(0x02 + (size != BYTE).int + `opMod`, size, opr2, disp, opr1)
 
-    proc `inst`*(ctx: Assembler, size: oprSize, base, index: TReg, scale, disp: int = 0, imm: int) =
+    proc `inst`*(ctx: Assembler, size: oprSize, base, index: TReg, scale, disp: int, imm: int) =
+      ctx.lit(`ins`, size, base, index, scale, disp, imm)
       ctx.emit(0x80 + (size != BYTE).int, `regMod`, size, base, index, scale, disp)
       if size == BYTE:
         doAssert(imm <= 0xFF)
@@ -697,7 +824,8 @@ macro arithGroup(inst: untyped, opMod, regMod: int): stmt =
         doAssert(imm <= 0xFFFFFFFF)
         ctx.appendDWord(imm and 0xFFFFFFFF)
 
-    proc `inst`*(ctx: Assembler, size: oprSize, base, index: TReg, scale, disp: int = 0, opr2: TReg) =
+    proc `inst`*(ctx: Assembler, size: oprSize, base, index: TReg, scale, disp: int, opr2: TReg) =
+      ctx.lit(`ins`, size, base, index, scale, disp, opr2)
       let opr2Type = getRegType(opr2)
       doAssert(opr2Type in {REG8, REG16, REG32, REG64})
       if opr2Type == REG8: doAssert(size == BYTE)
@@ -707,6 +835,7 @@ macro arithGroup(inst: untyped, opMod, regMod: int): stmt =
       ctx.emit(0x00 + (size != BYTE).int + `opMod`, size, base, index, scale, disp, opr2)
 
     proc `inst`*(ctx: Assembler, opr1: TReg, size: oprSize, base, index: TReg, scale, disp: int = 0) =
+      ctx.lit(`ins`, opr1, size, base, index, scale, disp)
       let opr1Type = getRegType(opr1)
       doAssert(opr1Type in {REG8, REG16, REG32, REG64})
       if opr1Type == REG8: doAssert(size == BYTE)
@@ -725,8 +854,10 @@ arithGroup(`xor`, 0x30, 6)
 arithGroup(cmp, 0x38, 7)
 
 macro pushPopGroup(inst: untyped, opCode: int): stmt =
+  let ins = inst.deacc
   result = quote do:
     proc `inst`*(ctx: Assembler, opr: TReg) =
+      ctx.lit(`ins`, opr)
       let oprType = getRegType(opr)
       let oprVal = getRegVal(opr)
       doAssert(oprType in {REG16, REG32, REG64})
@@ -747,8 +878,10 @@ macro pushPopGroup(inst: untyped, opCode: int): stmt =
       ctx.add inst
 
 macro pushPopGroup(inst: untyped, opCode: int, regMod: int): stmt =
+  let ins = inst.deacc
   result = quote do:
     proc `inst`*(ctx: Assembler, size: oprSize, opr: TReg, disp: int = 0) =
+      ctx.lit(`ins`, size, opr, disp)
       var sizex = size
       if ctx.bits == BITS64:
         doAssert(size in {WORD, QWORD})
@@ -758,6 +891,7 @@ macro pushPopGroup(inst: untyped, opCode: int, regMod: int): stmt =
       ctx.emit(`opcode`, `regMod`, sizex, opr, disp)
 
     proc `inst`*(ctx: Assembler, size: oprSize, base, index: TReg, scale, disp: int = 0) =
+      ctx.lit(`ins`, size, base, index, scale, disp)
       var sizex = size
       if ctx.bits == BITS64:
         doAssert(size in {WORD, QWORD})
@@ -768,12 +902,14 @@ macro pushPopGroup(inst: untyped, opCode: int, regMod: int): stmt =
 
 proc push*(ctx: Assembler, imm: int = 0) =
   if imm <= 0xFF:
+    ctx.lit("push byte", imm)
     var data = ""
     data.add chr(0x6A)
     var inst = Instruction(data: data)
     ctx.add inst
     ctx.appendChar chr(imm and 0xFF)
   elif imm > 0xFF and imm <= 0xFFFF:
+    ctx.lit("push word", imm)
     var data = ""
     data.add chr(0x66)
     data.add chr(0x68)
@@ -781,6 +917,7 @@ proc push*(ctx: Assembler, imm: int = 0) =
     ctx.add inst
     ctx.appendWord(imm and 0xFFFF)
   elif imm > 0xFFFF:
+    ctx.lit("push dword", imm)
     var data = ""
     data.add chr(0x68)
     var inst = Instruction(data: data)
@@ -788,6 +925,7 @@ proc push*(ctx: Assembler, imm: int = 0) =
     ctx.appendDWord(imm and 0xFFFFFFFF)
 
 proc push*(ctx: Assembler, opr: regseg) =
+  ctx.lit("push", reg(opr.int, REGSEG))
   var data = ""
   case opr
   of CS: data.add chr(0x0E)
@@ -804,6 +942,7 @@ proc push*(ctx: Assembler, opr: regseg) =
   ctx.add inst
 
 proc pop*(ctx: Assembler, opr: regseg) =
+  ctx.lit("pop", reg(opr.int, REGSEG))
   var data = ""
   if ctx.bits == BITS64:
     case opr
@@ -832,6 +971,7 @@ proc pop*(ctx: Assembler, opr: regseg) =
   ctx.add inst
 
 proc popa*(ctx: Assembler) =
+  ctx.lit("popa")
   doAssert(ctx.bits != BITS64)
   var data = ""
   data.add chr(0x61)
@@ -839,6 +979,7 @@ proc popa*(ctx: Assembler) =
   ctx.add inst
   
 proc popad*(ctx: Assembler) =
+  ctx.lit("popad")
   doAssert(ctx.bits != BITS64)
   var data = ""
   data.add chr(0x61)
@@ -846,6 +987,7 @@ proc popad*(ctx: Assembler) =
   ctx.add inst
  
 proc pusha*(ctx: Assembler) =
+  ctx.lit("pusha")
   doAssert(ctx.bits != BITS64)
   var data = ""
   data.add chr(0x60)
@@ -853,12 +995,51 @@ proc pusha*(ctx: Assembler) =
   ctx.add inst
   
 proc pushad*(ctx: Assembler) =
+  ctx.lit("pushad")
   doAssert(ctx.bits != BITS64)
   var data = ""
   data.add chr(0x60)
   var inst = Instruction(data: data)
   ctx.add inst
  
+proc retn*(ctx: Assembler) =
+  ctx.lit("retn")
+  var data = ""
+  data.add chr(0xC3)
+  var inst = Instruction(data: data)
+  ctx.add inst
+  
+proc retf*(ctx: Assembler) =
+  ctx.lit("retf")
+  var data = ""
+  data.add chr(0xCB)
+  var inst = Instruction(data: data)
+  ctx.add inst
+
+proc retn*(ctx: Assembler, imm: int) =
+  ctx.lit("retn", imm)
+  if imm == 0x00: 
+    ctx.retn()
+    return
+    
+  var data = ""
+  data.add chr(0xC2)
+  var inst = Instruction(data: data)
+  ctx.add inst
+  ctx.appendWord(imm and 0xFFFF)
+
+proc retf*(ctx: Assembler, imm: int) =
+  ctx.lit("retf", imm)
+  if imm == 0x00: 
+    ctx.retf()
+    return
+    
+  var data = ""
+  data.add chr(0xCA)
+  var inst = Instruction(data: data)
+  ctx.add inst
+  ctx.appendWord(imm and 0xFFFF)
+  
 pushPopGroup(pop, 0x58)
 pushPopGroup(push, 0x50)
 pushPopGroup(pop, 0x8F, 0)

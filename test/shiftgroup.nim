@@ -1,10 +1,9 @@
 template genShiftA(T: typedesc, imm, r: string) =
   for reg in T.low..top[T](ctx):
-    ctx.lst.write "$1 $2, $3\n" % [inst, $reg, imm]
+    ctx.lst.write "$1 $2, $3\n" % [inst, $reg, toUpper(imm)]
 
   ctx.nim.write "for reg in $1.low..top[$1](ctx):\n" % [toLower(r)]
   ctx.nim.write "  ctx.$1(TReg(($2.int shl 8) or reg.int), $3)\n" % [niminst, r, imm]
-  ctx.nim.write "  ctx.add(\"$1 $$1, $2\" % [$$reg])\n" % [inst, imm]
 
 proc testShift(ctx: TestContext, inst, niminst: string) =
   genShiftA(reg8, "1", "REG8")
@@ -22,28 +21,26 @@ proc testShift(ctx: TestContext, inst, niminst: string) =
 
 template genShiftB(T: typedesc, imm, r: string) =
   for reg in T.low..top[T](ctx):
-    ctx.lst.write "$1 $2 [$3], $4\n" % [inst, size, $reg, imm]
-     
+    ctx.lst.write "$1 $2 [$3], $4\n" % [inst, size, $reg, toUpper(imm)]
+
   ctx.nim.write "for reg in $1.low..top[$1](ctx):\n" % [toLower(r)]
   ctx.nim.write "  ctx.$1(nimjit.$3, TReg(($2.int shl 8) or reg.int), 0, $4)\n" % [niminst, r, size, imm]
-  ctx.nim.write "  ctx.add(\"$1 $2 [$$1], $3\" % [$$reg])\n" % [inst, size, imm]
 
 template genShiftBB(T: typedesc, imm, r: string) =
   for base in T.low..top[T](ctx):
     for index in T.low..top[T](ctx):
       for scale in {1, 2, 4, 8}:
-        when T is reg32: 
+        when T is reg32:
           if index == ESP: continue
-        else: 
+        else:
           if index == RSP: continue
-        ctx.lst.write "$1 $2 [$3 + $4 * $5], $6\n" % [inst, size, $base, $index, $scale, imm]
+        ctx.lst.write "$1 $2 [$3 + $4 * $5], $6\n" % [inst, size, $base, $index, $scale, toUpper(imm)]
 
   ctx.nim.write "for base in $1.low..top[$1](ctx):\n" % [toLower(r)]
   ctx.nim.write "  for index in $1.low..top[$1](ctx):\n" % [toLower(r)]
   ctx.nim.write "    for scale in {1, 2, 4, 8}:\n"
   ctx.nim.write "      if index.int == ESP.int: continue\n"
   ctx.nim.write "      ctx.$1(nimjit.$2, reg(base.int, $3), reg(index.int, $3), scale, 0, $4)\n" % [niminst, size, r, imm]
-  ctx.nim.write "      ctx.add(\"$1 $2 [$$1 + $$2 * $$3], $3\" % [$$base, $$index, $$scale])\n" % [inst, size, imm]
 
 proc testShift(ctx: TestContext, inst: string, niminst, size: string) =
   genShiftB(reg32, "1", "REG32")
@@ -61,28 +58,26 @@ proc testShift(ctx: TestContext, inst: string, niminst, size: string) =
 
 template genShiftC(T: typedesc, imm, r: string) =
   for reg in T.low..top[T](ctx):
-    ctx.lst.write "$1 $2 [$3 + $4], $5\n" % [inst, size, $reg, $disp, imm]
+    ctx.lst.write "$1 $2 [$3 + $4], $5\n" % [inst, size, $reg, $disp, toUpper(imm)]
 
   ctx.nim.write "for reg in $1.low..top[$1](ctx):\n" % [toLower(r)]
   ctx.nim.write "  ctx.$1(nimjit.$3, TReg(($2.int shl 8) or reg.int), $4, $5)\n" % [niminst, r, size, $disp, imm]
-  ctx.nim.write "  ctx.add(\"$1 $2 [$$1 + $3], $4\" % [$$reg])\n" % [inst, size, $disp, imm]
 
 template genShiftCC(T: typedesc, imm, r: string) =
   for base in T.low..top[T](ctx):
     for index in T.low..top[T](ctx):
       for scale in {1, 2, 4, 8}:
-        when T is reg32: 
+        when T is reg32:
           if index == ESP: continue
-        else: 
+        else:
           if index == RSP: continue
-        ctx.lst.write "$1 $2 [$3 + $4 * $5 + $6], $7\n" % [inst, size, $base, $index, $scale, $disp, imm]
+        ctx.lst.write "$1 $2 [$3 + $4 * $5 + $6], $7\n" % [inst, size, $base, $index, $scale, $disp, toUpper(imm)]
 
   ctx.nim.write "for base in $1.low..top[$1](ctx):\n" % [toLower(r)]
   ctx.nim.write "  for index in $1.low..top[$1](ctx):\n" % [toLower(r)]
   ctx.nim.write "    for scale in {1, 2, 4, 8}:\n"
   ctx.nim.write "      if index.int == ESP.int: continue\n"
   ctx.nim.write "      ctx.$1(nimjit.$2, reg(base.int, $3), reg(index.int, $3), scale, $4, $5)\n" % [niminst, size, r, $disp, imm]
-  ctx.nim.write "      ctx.add(\"$1 $2 [$$1 + $$2 * $$3 + $3], $4\" % [$$base, $$index, $$scale])\n" % [inst, size, $disp, imm]
 
 proc testShift(ctx: TestContext, inst: string, niminst, size: string, disp: int) =
   genShiftC(reg32, "1", "REG32")
@@ -105,21 +100,21 @@ proc testShiftA(ctx: TestContext, inst, niminst: string) =
   ctx.testShift(inst, niminst, "dword")
   if ctx.bits == BITS64: ctx.testShift(inst, niminst, "qword")
 
-  ctx.testShift(inst, niminst, "byte", 0)
-  ctx.testShift(inst, niminst, "word", 0)
-  ctx.testShift(inst, niminst, "dword", 0)
-  if ctx.bits == BITS64: ctx.testShift(inst, niminst, "qword", 0)
+  ctx.testShift(inst, niminst, "byte", 10)
+  ctx.testShift(inst, niminst, "word", 10)
+  ctx.testShift(inst, niminst, "dword", 10)
+  if ctx.bits == BITS64: ctx.testShift(inst, niminst, "qword", 10)
 
 proc testShiftB(ctx: TestContext, inst, niminst: string) =
-  ctx.testShift(inst, niminst, "byte", 100)
-  ctx.testShift(inst, niminst, "word", 100)
-  ctx.testShift(inst, niminst, "dword", 100)
-  if ctx.bits == BITS64: ctx.testShift(inst, niminst, "qword", 100)
+  ctx.testShift(inst, niminst, "byte", 1000)
+  ctx.testShift(inst, niminst, "word", 1000)
+  ctx.testShift(inst, niminst, "dword", 1000)
+  if ctx.bits == BITS64: ctx.testShift(inst, niminst, "qword", 1000)
 
-  ctx.testShift(inst, niminst, "byte", 3000)
-  ctx.testShift(inst, niminst, "word", 3000)
-  ctx.testShift(inst, niminst, "dword", 3000)
-  if ctx.bits == BITS64: ctx.testShift(inst, niminst, "qword", 3000)
+  ctx.testShift(inst, niminst, "byte", 300000)
+  ctx.testShift(inst, niminst, "word", 300000)
+  ctx.testShift(inst, niminst, "dword", 300000)
+  if ctx.bits == BITS64: ctx.testShift(inst, niminst, "qword", 300000)
 
 proc genShift(ctx: TestContext, inst, niminst: string) =
   beginTest(inst):
