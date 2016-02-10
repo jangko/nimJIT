@@ -60,7 +60,7 @@ type
   Assembler* = ref object
     instList: seq[Instruction]
     literal: seq[string]
-    defaultBits: asmFlag
+    bits: asmFlag
 
 const
   SPL* = AH
@@ -105,35 +105,32 @@ genRegisters(regseg, REGSEG)
 proc reg*(r: int, t: regType): TReg {.inline.} =
   result = TReg((t.int shl 8) or r)
 
-proc add(ctx: Assembler, inst: Instruction) =
-  ctx.instList.add inst
-
-proc add*(ctx: Assembler, lit: string) =
-  ctx.literal.add lit
-
 proc len(inst: Instruction): int =
   result = inst.data.len
 
-proc appendChar(ctx: Assembler, imm: char) =
-  ctx.instList[ctx.instList.len-1].data.add imm
-
-proc appendWord(ctx: Assembler, imm: int) =
-  var inst = ctx.instList[ctx.instList.len-1]
-  inst.data.add chr(imm and 0xFF)
-  inst.data.add chr((imm and 0xFF00) shr 8)
-
-proc appendDWord(ctx: Assembler, imm: int) =
-  var inst = ctx.instList[ctx.instList.len-1]
-  inst.data.add chr(imm and 0xFF)
-  inst.data.add chr((imm and 0x0000FF00) shr 8)
-  inst.data.add chr((imm and 0x00FF0000) shr 16)
-  inst.data.add chr((imm and 0xFF000000) shr 24)
-
-proc newAssembler*(bits: asmFlag): Assembler =
-  new(result)
-  result.instList = @[]
-  result.literal = @[]
-  result.defaultBits = bits
+proc top*[T](ctx: Assembler): T =
+  when T is reg8:
+    result = if ctx.bits == BITS32: BH else: R15B
+  elif T is reg16:
+    result = if ctx.bits == BITS32: DI else: R15W
+  elif T is reg32:
+    result = if ctx.bits == BITS32: EDI else: R15D
+  elif T is reg64:
+    result = if ctx.bits == BITS32: RDI else: R15
+  elif T is regxmm:
+    result = if ctx.bits == BITS32: XMM7 else: XMM15
+  elif T is regymm:
+    result = if ctx.bits == BITS32: YMM7 else: YMM15
+  elif T is regcr:
+    result = if ctx.bits == BITS32: CR7 else: CR15
+  elif T is regdr:
+    result = if ctx.bits == BITS32: DR7 else: DR15
+  elif T is regfpu:
+    result = ST7
+  elif T is regmmx:
+    result = MMX7
+  elif T is regseg:
+    result = GS
 
 #----------------------LISTING------------------------
 proc padr(w, line: int): string =
@@ -169,6 +166,32 @@ proc listing*(ctx: Assembler, s: File) =
     inc lit
 
 #----------------------LISTING------------------------
+proc add(ctx: Assembler, inst: Instruction) =
+  ctx.instList.add inst
+
+proc add*(ctx: Assembler, lit: string) =
+  ctx.literal.add lit
+
+proc appendChar(ctx: Assembler, imm: char) =
+  ctx.instList[ctx.instList.len-1].data.add imm
+
+proc appendWord(ctx: Assembler, imm: int) =
+  var inst = ctx.instList[ctx.instList.len-1]
+  inst.data.add chr(imm and 0xFF)
+  inst.data.add chr((imm and 0xFF00) shr 8)
+
+proc appendDWord(ctx: Assembler, imm: int) =
+  var inst = ctx.instList[ctx.instList.len-1]
+  inst.data.add chr(imm and 0xFF)
+  inst.data.add chr((imm and 0x0000FF00) shr 8)
+  inst.data.add chr((imm and 0x00FF0000) shr 16)
+  inst.data.add chr((imm and 0xFF000000) shr 24)
+
+proc newAssembler*(bits: asmFlag): Assembler =
+  new(result)
+  result.instList = @[]
+  result.literal = @[]
+  result.bits = bits
 
 proc getRegType*(opr: TReg): regType {.inline.} =
   result = regType((opr.int and 0xFF00) shr 8)
@@ -187,14 +210,18 @@ template splitBaseIndex() {.dirty.} =
   let indexType = regType((index.int and 0xFF00) shr 8)
 
 proc emit(ctx: Assembler, opcode, regMod: int, opr: TReg) =
+  if ctx.bits == BITS32:
+    doAssert(getRegType(opr) != REG64)
+    doAssert(getRegVal(opr) < 0x08)
+
   splitReg()
   var modrm = MOD11 or (regMod shl 3) or (oprVal and 0b0000_0111)
   var data = ""
 
-  if oprType == REG16 and ctx.defaultBits == BITS64:
+  if oprType == REG16 and ctx.bits in {BITS64, BITS32}:
     data.add chr(0x66)
 
-  if oprType == REG64 and ctx.defaultBits == BITS64:
+  if oprType == REG64 and ctx.bits == BITS64:
     var rex = REX_BASE or REX_W
     if oprVal >= 0x08: rex = rex or REX_B
     data.add chr(rex)
@@ -211,9 +238,14 @@ proc emit(ctx: Assembler, opcode, regMod: int, size: oprSize, opr: TReg, disp: i
   var data = ""
   var useREX = false
   var rex = REX_BASE
+
+  if ctx.bits == BITS32:
+    doAssert(getRegType(opr) != REG64)
+    doAssert(getRegVal(opr) < 0x08)
+
   doAssert(oprType in {REG32, REG64})
   if size == WORD: data.add chr(0x66)
-  if oprType == REG32: data.add chr(0x67)
+  if oprType == REG32 and ctx.bits == BITS64: data.add chr(0x67)
 
   if oprVal >= 0x08:
     rex = rex or REX_B
@@ -267,10 +299,17 @@ proc emit(ctx: Assembler, opcode: int, size: oprSize, opr: TReg, disp: int, opr2
   var data = ""
   var useREX = false
   var rex = REX_BASE
+
+  if ctx.bits == BITS32:
+    doAssert(getRegType(opr) != REG64)
+    doAssert(getRegVal(opr) < 0x08)
+    doAssert(getRegType(opr2) != REG64)
+    doAssert(getRegVal(opr2) < 0x08)
+
   doAssert(oprType in {REG32, REG64})
   doAssert(getRegType(opr2) in {REG8, REG16, REG32, REG64})
   if size == WORD: data.add chr(0x66)
-  if oprType == REG32: data.add chr(0x67)
+  if oprType == REG32 and ctx.bits == BITS64: data.add chr(0x67)
 
   if oprVal >= 0x08:
     rex = rex or REX_B
@@ -339,12 +378,19 @@ proc emit(ctx: Assembler, opcode, regMod: int, size: oprSize, base, index: TReg,
   var data = ""
   var useREX = false
   var rex = REX_BASE
+
+  if ctx.bits == BITS32:
+    doAssert(getRegType(base) != REG64)
+    doAssert(getRegVal(base) < 0x08)
+    doAssert(getRegType(index) != REG64)
+    doAssert(getRegVal(index) < 0x08)
+
   doAssert(indexType == baseType)
   doAssert(indexType in {REG32, REG64})
   doAssert(scale in {1, 2, 4, 8})
   doAssert(indexVal != 0x04) #ESP or RSP
   if size == WORD: data.add chr(0x66)
-  if indexType == REG32: data.add chr(0x67)
+  if indexType == REG32 and ctx.bits == BITS64: data.add chr(0x67)
 
   if baseVal >= 0x08:
     rex = rex or REX_B
@@ -401,14 +447,21 @@ proc emit(ctx: Assembler, opcode: int, size: oprSize, base, index: TReg, scale, 
   var data = ""
   var useREX = false
   var rex = REX_BASE
+  if ctx.bits == BITS32:
+    doAssert(getRegType(base) != REG64)
+    doAssert(getRegVal(base) < 0x08)
+    doAssert(getRegType(index) != REG64)
+    doAssert(getRegVal(index) < 0x08)
+    doAssert(getRegType(opr2) != REG64)
+    doAssert(getRegVal(opr2) < 0x08)
+
   doAssert(baseType == indexType)
   doAssert(indexType in {REG32, REG64})
   doAssert(scale in {1, 2, 4, 8})
   doAssert(getRegType(opr2) in {REG8, REG16, REG32, REG64})
   doAssert(indexVal != 0x04) #ESP or RSP
   if size == WORD: data.add chr(0x66)
-
-  if indexType == REG32: data.add chr(0x67)
+  if indexType == REG32 and ctx.bits == BITS64: data.add chr(0x67)
 
   if baseVal >= 0x08:
     rex = rex or REX_B
@@ -474,12 +527,31 @@ template reg8p1(opr: TReg): expr =
 proc isReg(opr: TReg, typ: regType, regVal: int): bool =
   result = getRegType(opr) == typ and getRegVal(opr) == regVal
 
-macro singleOperandGroup(inst: untyped, opCode, regMod: int): stmt =
-  result = quote do:
-    proc `inst`*(ctx: Assembler, opr: TReg) =
-      doAssert(getRegType(opr) in {REG8, REG16, REG32, REG64})
-      ctx.emit(`opCode` + reg8p1(opr), `regMod`, opr)
+#322
+#486
 
+macro singleOperandGroup(inst: untyped, opCode, regMod: int, opCode2: int = 0): stmt =
+  if opCode.intVal != 0:
+    result = quote do:
+      proc `inst`*(ctx: Assembler, opr: TReg) =
+        let rt = getRegType(opr)
+        doAssert(rt in {REG8, REG16, REG32, REG64})
+        if rt in {REG16, REG32} and ctx.bits == BITS32:
+          doAssert(getRegVal(opr) < 0x08)
+          var data = ""
+          if rt == REG16: data.add chr(0x66)
+          data.add chr(`opCode2` or (getRegVal(opr) and 0b0000_0111))
+          var inst = Instruction(data: data)
+          ctx.add inst
+        else:
+          ctx.emit(`opCode` + reg8p1(opr), `regMod`, opr)
+  else:
+    result = quote do:
+      proc `inst`*(ctx: Assembler, opr: TReg) =
+        doAssert(getRegType(opr) in {REG8, REG16, REG32, REG64})
+        ctx.emit(`opCode` + reg8p1(opr), `regMod`, opr)
+
+  result.add quote do:
     proc `inst`*(ctx: Assembler, size: oprSize, opr: TReg, disp: int = 0) =
       doAssert(getRegType(opr) in {REG32, REG64})
       ctx.emit(`opcode` + (size != BYTE).int, `regMod`, size, opr, disp)
@@ -489,8 +561,8 @@ macro singleOperandGroup(inst: untyped, opCode, regMod: int): stmt =
       doAssert(getRegType(index) in {REG32, REG64})
       ctx.emit(`opcode` + (size != BYTE).int, `regMod`, size, base, index, scale, disp)
 
-singleOperandGroup(inc, 0xFE, 0)
-singleOperandGroup(dec, 0xFE, 1)
+singleOperandGroup(inc, 0xFE, 0, 0x40)
+singleOperandGroup(dec, 0xFE, 1, 0x48)
 singleOperandGroup(`not`, 0xF6, 2)
 singleOperandGroup(neg, 0xF6, 3)
 singleOperandGroup(mul, 0xF6, 4)
@@ -651,3 +723,143 @@ arithGroup(`and`,0x20, 4)
 arithGroup(sub, 0x28, 5)
 arithGroup(`xor`, 0x30, 6)
 arithGroup(cmp, 0x38, 7)
+
+macro pushPopGroup(inst: untyped, opCode: int): stmt =
+  result = quote do:
+    proc `inst`*(ctx: Assembler, opr: TReg) =
+      let oprType = getRegType(opr)
+      let oprVal = getRegVal(opr)
+      doAssert(oprType in {REG16, REG32, REG64})
+      var data = ""
+      if ctx.bits == BITS64:
+        doAssert(oprType != REG32)
+        if oprType == REG16: data.add chr(0x66)
+        if oprVal >= 0x08:
+          data.add chr(REX_BASE or REX_B)
+        data.add chr(`opCode` or (oprVal and 0b0000_0111))
+      else:
+        doAssert(oprType != REG64)
+        doAssert(oprVal < 0x08)
+        if oprType == REG16: data.add chr(0x66)
+        data.add chr(`opCode` or (oprVal and 0b0000_0111))
+
+      var inst = Instruction(data: data)
+      ctx.add inst
+
+macro pushPopGroup(inst: untyped, opCode: int, regMod: int): stmt =
+  result = quote do:
+    proc `inst`*(ctx: Assembler, size: oprSize, opr: TReg, disp: int = 0) =
+      var sizex = size
+      if ctx.bits == BITS64:
+        doAssert(size in {WORD, QWORD})
+        if size == QWORD: sizex = DWORD #no REX prefix
+      else:
+        doAssert(size in {WORD, DWORD})
+      ctx.emit(`opcode`, `regMod`, sizex, opr, disp)
+
+    proc `inst`*(ctx: Assembler, size: oprSize, base, index: TReg, scale, disp: int = 0) =
+      var sizex = size
+      if ctx.bits == BITS64:
+        doAssert(size in {WORD, QWORD})
+        if size == QWORD: sizex = DWORD #no REX prefix
+      else:
+        doAssert(size in {WORD, DWORD})
+      ctx.emit(`opcode`, `regMod`, sizex, base, index, scale, disp)
+
+proc push*(ctx: Assembler, imm: int = 0) =
+  if imm <= 0xFF:
+    var data = ""
+    data.add chr(0x6A)
+    var inst = Instruction(data: data)
+    ctx.add inst
+    ctx.appendChar chr(imm and 0xFF)
+  elif imm > 0xFF and imm <= 0xFFFF:
+    var data = ""
+    data.add chr(0x66)
+    data.add chr(0x68)
+    var inst = Instruction(data: data)
+    ctx.add inst
+    ctx.appendWord(imm and 0xFFFF)
+  elif imm > 0xFFFF:
+    var data = ""
+    data.add chr(0x68)
+    var inst = Instruction(data: data)
+    ctx.add inst
+    ctx.appendDWord(imm and 0xFFFFFFFF)
+
+proc push*(ctx: Assembler, opr: regseg) =
+  var data = ""
+  case opr
+  of CS: data.add chr(0x0E)
+  of SS: data.add chr(0x16)
+  of DS: data.add chr(0x1E)
+  of ES: data.add chr(0x06)
+  of FS:
+    data.add chr(0x0F)
+    data.add chr(0xA0)
+  of GS:
+    data.add chr(0x0F)
+    data.add chr(0xA8)
+  var inst = Instruction(data: data)
+  ctx.add inst
+
+proc pop*(ctx: Assembler, opr: regseg) =
+  var data = ""
+  if ctx.bits == BITS64:
+    case opr
+    of FS:
+      data.add chr(0x0F)
+      data.add chr(0xA1)
+    of GS:
+      data.add chr(0x0F)
+      data.add chr(0xA9)
+    else:
+      doAssert(false)
+  else:
+    case opr
+    of DS: data.add chr(0x1F)
+    of ES: data.add chr(0x07)
+    of SS: data.add chr(0x17)
+    of FS:
+      data.add chr(0x0F)
+      data.add chr(0xA1)
+    of GS:
+      data.add chr(0x0F)
+      data.add chr(0xA9)
+    else:
+      doAssert(false)
+  var inst = Instruction(data: data)
+  ctx.add inst
+
+proc popa*(ctx: Assembler) =
+  doAssert(ctx.bits != BITS64)
+  var data = ""
+  data.add chr(0x61)
+  var inst = Instruction(data: data)
+  ctx.add inst
+  
+proc popad*(ctx: Assembler) =
+  doAssert(ctx.bits != BITS64)
+  var data = ""
+  data.add chr(0x61)
+  var inst = Instruction(data: data)
+  ctx.add inst
+ 
+proc pusha*(ctx: Assembler) =
+  doAssert(ctx.bits != BITS64)
+  var data = ""
+  data.add chr(0x60)
+  var inst = Instruction(data: data)
+  ctx.add inst
+  
+proc pushad*(ctx: Assembler) =
+  doAssert(ctx.bits != BITS64)
+  var data = ""
+  data.add chr(0x60)
+  var inst = Instruction(data: data)
+  ctx.add inst
+ 
+pushPopGroup(pop, 0x58)
+pushPopGroup(push, 0x50)
+pushPopGroup(pop, 0x8F, 0)
+pushPopGroup(push, 0xFF, 6)
