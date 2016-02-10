@@ -7,11 +7,15 @@ type
     testName: string
     counter: int
     startTime: float
+    symCounter: int
+    bits: string
 
-proc newTest(): TestContext =
+proc newTest(bits: string): TestContext =
   new(result)
   result.counter = 0
   result.startTime = epochTime()
+  result.symCounter = 0
+  result.bits = bits
 
 proc setName(ctx: TestContext, testName: string) =
   ctx.testName = testName
@@ -30,7 +34,7 @@ proc open(ctx: TestContext) =
     quit(-1)
 
   ctx.nim.write "import nimjit, os\n"
-  ctx.nim.write "var ctx = newAssembler()\n"
+  ctx.nim.write "var ctx = newAssembler($1)\n" % [ctx.bits]
 
 proc close(ctx: TestContext) =
   ctx.nim.write "var output: File\n"
@@ -77,9 +81,9 @@ proc close(ctx: TestContext) =
 
   ctx.lst.close()
   ctx.nim.close()
-  
+
   let timePassed = formatFloat(epochTime() - ctx.startTime, ffDecimal, 3)
-  
+
   echo "$1 $2 OK $3" % [$ctx.counter, ctx.testName, timePassed]
 
 macro beginTest(name: string, n: typed): stmt =
@@ -91,12 +95,24 @@ macro beginTest(name: string, n: typed): stmt =
     result.add parseExpr("ctx.close()")
   #echo result.toStrLit.strVal
 
+proc newSym(ctx: TestContext): string =
+  let s = "jitsym" & $ctx.symCounter
+  ctx.nim.write "const $1 = [\n" % [s]
+  inc ctx.symCounter
+  result = s
+
 template genSingleOperandA(T: typedesc) =
+  let sym = ctx.newSym()
   for reg in T.low..T.high:
-    let lit = "$1 $2" % [inst, $reg]
+    let r = toLower($reg)
+    let lit = "$1 $2" % [inst, r]
     ctx.lst.write lit & "\n"
-    ctx.nim.write "ctx.$1($2)\n" % [niminst, $reg]
-    ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
+    ctx.nim.write "  ($1, \"$2\"),\n" % [r, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[1])\n"
 
 proc testSingleOperand(ctx: TestContext, inst, niminst: string) =
   genSingleOperandA(reg8)
@@ -105,24 +121,38 @@ proc testSingleOperand(ctx: TestContext, inst, niminst: string) =
   genSingleOperandA(reg64)
 
 template genSingleOperandB(T: typedesc) =
+  let sym = ctx.newSym()
   for reg in T.low..T.high:
-    let lit = "$1 $2 [$3]" % [inst, size, $reg]
+    let r = toLower($reg)
+    let lit = "$1 $2 [$3]" % [inst, size, r]
     ctx.lst.write lit & "\n"
-    ctx.nim.write "ctx.$1(nimjit.$2, $3)\n" % [niminst, size, $reg]
-    ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
+    ctx.nim.write "  (nimjit.$1, $2, \"$3\"),\n" % [size, r, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[2])\n"
 
 template genSingleOperandBB(T: typedesc) =
+  let sym = ctx.newSym()
   for base in T.low..T.high:
+    let bs = toLower($base)
     for index in T.low..T.high:
+      let idx = toLower($index)
       for scale in {1, 2, 4, 8}:
         when T is reg32:
           if index == ESP: continue
         else:
           if index == RSP: continue
-        let lit = "$1 $2 [$3 + $4 * $5]" % [inst, size, $base, $index, $scale]
+        let sc = $scale
+        let lit = "$1 $2 [$3 + $4 * $5]" % [inst, size, bs, idx, sc]
         ctx.lst.write lit & "\n"
-        ctx.nim.write "ctx.$1(nimjit.$2, $3, $4, $5)\n" % [niminst, size, $base, $index, $scale]
-        ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
+        ctx.nim.write "  (nimjit.$1, $2, $3, $4, \"$5\"),\n" % [size, bs, idx, sc, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1], k[2], k[3])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[4])\n"
 
 proc testSingleOperand(ctx: TestContext, inst: string, niminst, size: string) =
   genSingleOperandB(reg32)
@@ -131,24 +161,40 @@ proc testSingleOperand(ctx: TestContext, inst: string, niminst, size: string) =
   genSingleOperandBB(reg64)
 
 template genSingleOperandC(T: typedesc) =
+  let sym = ctx.newSym()
+  let d = $disp
   for reg in T.low..T.high:
-    let lit = "$1 $2 [$3 + $4]" % [inst, size, $reg, $disp]
+    let r = toLower($reg)
+    let lit = "$1 $2 [$3 + $4]" % [inst, size, r, d]
     ctx.lst.write lit & "\n"
-    ctx.nim.write "ctx.$1(nimjit.$2, $3, $4)\n" % [niminst, size, $reg, $disp]
-    ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
+    ctx.nim.write "  (nimjit.$1, $2, $3, \"$4\"),\n" % [size, r, d, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1], k[2])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[3])\n"
 
 template genSingleOperandCC(T: typedesc) =
+  let sym = ctx.newSym()
+  let d = $disp
   for base in T.low..T.high:
+    let bs = toLower($base)
     for index in T.low..T.high:
+      let idx = toLower($index)
       for scale in {1, 2, 4, 8}:
         when T is reg32:
           if index == ESP: continue
         else:
           if index == RSP: continue
-        let lit = "$1 $2 [$3 + $4 * $5 + $6]" % [inst, size, $base, $index, $scale, $disp]
+        let sc = $scale
+        let lit = "$1 $2 [$3 + $4 * $5 + $6]" % [inst, size, bs, idx, sc, d]
         ctx.lst.write lit & "\n"
-        ctx.nim.write "ctx.$1(nimjit.$2, $3, $4, $5, $6)\n" % [niminst, size, $base, $index, $scale, $disp]
-        ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
+        ctx.nim.write "  (nimjit.$1, $2, $3, $4, $5, \"$6\"),\n" % [size, bs, idx, sc, d, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1], k[2], k[3], k[4])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[5])\n"
 
 proc testSingleOperand(ctx: TestContext, inst: string, niminst, size: string, disp: int) =
   genSingleOperandC(reg32)
@@ -159,6 +205,7 @@ proc testSingleOperand(ctx: TestContext, inst: string, niminst, size: string, di
 proc genSingleOperand(ctx: TestContext, inst, niminst: string) =
   beginTest(inst):
     ctx.testSingleOperand(inst, niminst)
+
     ctx.testSingleOperand(inst, niminst, "byte")
     ctx.testSingleOperand(inst, niminst, "word")
     ctx.testSingleOperand(inst, niminst, "dword")
@@ -168,7 +215,7 @@ proc genSingleOperand(ctx: TestContext, inst, niminst: string) =
     ctx.testSingleOperand(inst, niminst, "word", 0)
     ctx.testSingleOperand(inst, niminst, "dword", 0)
     ctx.testSingleOperand(inst, niminst, "qword", 0)
-    
+
     ctx.testSingleOperand(inst, niminst, "byte", 10)
     ctx.testSingleOperand(inst, niminst, "word", 10)
     ctx.testSingleOperand(inst, niminst, "dword", 10)
@@ -180,11 +227,17 @@ proc genSingleOperand(ctx: TestContext, inst, niminst: string) =
     ctx.testSingleOperand(inst, niminst, "qword", 3000)
 
 template genShiftA(T: typedesc, imm: string) =
+  let sym = ctx.newSym()
   for reg in T.low..T.high:
-    let lit = "$1 $2, $3" % [inst, $reg, imm]
+    let r = toLower($reg)
+    let lit = "$1 $2, $3" % [inst, r, imm]
     ctx.lst.write lit & "\n"
-    ctx.nim.write "ctx.$1($2, $3)\n" % [niminst, $reg, $imm]
-    ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
+    ctx.nim.write "  ($1, $2, \"$3\"),\n" % [r, imm, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[2])\n"
 
 proc testShift(ctx: TestContext, inst, niminst: string) =
   genShiftA(reg8, "1")
@@ -195,30 +248,44 @@ proc testShift(ctx: TestContext, inst, niminst: string) =
   genShiftA(reg16, "7")
   genShiftA(reg32, "7")
   genShiftA(reg64, "7")
-  genShiftA(reg8, "CL")
-  genShiftA(reg16, "CL")
-  genShiftA(reg32, "CL")
-  genShiftA(reg64, "CL")
+  genShiftA(reg8, "cl")
+  genShiftA(reg16, "cl")
+  genShiftA(reg32, "cl")
+  genShiftA(reg64, "cl")
 
 template genShiftB(T: typedesc, imm: string) =
+  let sym = ctx.newSym()
   for reg in T.low..T.high:
-    let lit = "$1 $2 [$3], $4" % [inst, size, $reg, imm]
+    let r = toLower($reg)
+    let lit = "$1 $2 [$3], $4" % [inst, size, r, imm]
     ctx.lst.write lit & "\n"
-    ctx.nim.write "ctx.$1(nimjit.$2, $3, 0, $4)\n" % [niminst, size, $reg, imm]
-    ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
+    ctx.nim.write "  (nimjit.$1, $2, $3, \"$4\"),\n" % [size, r, imm, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1], 0, k[2])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[3])\n"
 
 template genShiftBB(T: typedesc, imm: string) =
+  let sym = ctx.newSym()
   for base in T.low..T.high:
+    let bs = toLower($base)
     for index in T.low..T.high:
+      let idx = toLower($index)
       for scale in {1, 2, 4, 8}:
         when T is reg32:
           if index == ESP: continue
         else:
           if index == RSP: continue
-        let lit = "$1 $2 [$3 + $4 * $5], $6" % [inst, size, $base, $index, $scale, imm]
+        let sc = $scale
+        let lit = "$1 $2 [$3 + $4 * $5], $6" % [inst, size, bs, idx, sc, imm]
         ctx.lst.write lit & "\n"
-        ctx.nim.write "ctx.$1(nimjit.$2, $3, $4, $5, 0, $6)\n" % [niminst, size, $base, $index, $scale, imm]
-        ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
+        ctx.nim.write "  (nimjit.$1, $2, $3, $4, $5, \"$6\"),\n" % [size, bs, idx, sc, imm, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1], k[2], k[3], 0, k[4])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[5])\n"
 
 proc testShift(ctx: TestContext, inst: string, niminst, size: string) =
   genShiftB(reg32, "1")
@@ -229,30 +296,46 @@ proc testShift(ctx: TestContext, inst: string, niminst, size: string) =
   genShiftB(reg64, "7")
   genShiftBB(reg32, "7")
   genShiftBB(reg64, "7")
-  genShiftB(reg32, "CL")
-  genShiftB(reg64, "CL")
-  genShiftBB(reg32, "CL")
-  genShiftBB(reg64, "CL")
+  genShiftB(reg32, "cl")
+  genShiftB(reg64, "cl")
+  genShiftBB(reg32, "cl")
+  genShiftBB(reg64, "cl")
 
 template genShiftC(T: typedesc, imm: string) =
+  let sym = ctx.newSym()
+  let d = $disp
   for reg in T.low..T.high:
-    let lit = "$1 $2 [$3 + $4], $5" % [inst, size, $reg, $disp, imm]
+    let r = toLower($reg)
+    let lit = "$1 $2 [$3 + $4], $5" % [inst, size, r, d, imm]
     ctx.lst.write lit & "\n"
-    ctx.nim.write "ctx.$1(nimjit.$2, $3, $4, $5)\n" % [niminst, size, $reg, $disp, imm]
-    ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
+    ctx.nim.write "  (nimjit.$1, $2, $3, $4, \"$5\"),\n" % [size, r, d, imm, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1], k[2], k[3])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[4])\n"
 
 template genShiftCC(T: typedesc, imm: string) =
+  let sym = ctx.newSym()
+  let d = $disp
   for base in T.low..T.high:
+    let bs = toLower($base)
     for index in T.low..T.high:
+      let idx = toLower($index)
       for scale in {1, 2, 4, 8}:
         when T is reg32:
           if index == ESP: continue
         else:
           if index == RSP: continue
-        let lit = "$1 $2 [$3 + $4 * $5 + $6], $7" % [inst, size, $base, $index, $scale, $disp, imm]
+        let sc = $scale
+        let lit = "$1 $2 [$3 + $4 * $5 + $6], $7" % [inst, size, bs, idx, sc, d, imm]
         ctx.lst.write lit & "\n"
-        ctx.nim.write "ctx.$1(nimjit.$2, $3, $4, $5, $6, $7)\n" % [niminst, size, $base, $index, $scale, $disp, imm]
-        ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
+        ctx.nim.write "  (nimjit.$1, $2, $3, $4, $5, $6, \"$7\"),\n" % [size, bs, idx, sc, d, imm, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1], k[2], k[3], k[4], k[5])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[6])\n"
 
 proc testShift(ctx: TestContext, inst: string, niminst, size: string, disp: int) =
   genShiftC(reg32, "1")
@@ -263,10 +346,10 @@ proc testShift(ctx: TestContext, inst: string, niminst, size: string, disp: int)
   genShiftC(reg64, "7")
   genShiftCC(reg32, "7")
   genShiftCC(reg64, "7")
-  genShiftC(reg32, "CL")
-  genShiftC(reg64, "CL")
-  genShiftCC(reg32, "CL")
-  genShiftCC(reg64, "CL")
+  genShiftC(reg32, "cl")
+  genShiftC(reg64, "cl")
+  genShiftCC(reg32, "cl")
+  genShiftCC(reg64, "cl")
 
 proc genShift(ctx: TestContext, inst, niminst: string) =
   beginTest(inst):
@@ -280,7 +363,7 @@ proc genShift(ctx: TestContext, inst, niminst: string) =
     ctx.testShift(inst, niminst, "word", 0)
     ctx.testShift(inst, niminst, "dword", 0)
     ctx.testShift(inst, niminst, "qword", 0)
-    
+
     ctx.testShift(inst, niminst, "byte", 10)
     ctx.testShift(inst, niminst, "word", 10)
     ctx.testShift(inst, niminst, "dword", 10)
@@ -290,28 +373,42 @@ proc genShift(ctx: TestContext, inst, niminst: string) =
     ctx.testShift(inst, niminst, "word", 3000)
     ctx.testShift(inst, niminst, "dword", 3000)
     ctx.testShift(inst, niminst, "qword", 3000)
-    
+
 template testArithA(T: typedesc) =
+  let sym = ctx.newSym()
+  let im = $imm
   for reg in T.low..T.high:
+    let r = toLower($reg)
     when T is reg8:
-      let lit = "$1 $2, byte $3" % [inst, $reg, $imm]
+      let lit = "$1 $2, byte $3" % [inst, r, im]
     elif T is reg16:
-      let lit = "$1 $2, word $3" % [inst, $reg, $imm]
+      let lit = "$1 $2, word $3" % [inst, r, im]
     elif T is reg32:
-      let lit = "$1 $2, dword $3" % [inst, $reg, $imm]
+      let lit = "$1 $2, dword $3" % [inst, r, im]
     else:
-      let lit = "$1 $2, $3" % [inst, $reg, $imm]
+      let lit = "$1 $2, $3" % [inst, r, im]
     ctx.lst.write lit & "\n"
-    ctx.nim.write "ctx.$1($2, $3)\n" % [niminst, $reg, $imm]
-    ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
- 
+    ctx.nim.write "  ($1, $2, \"$3\"),\n" % [r, im, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[2])\n"
+
 template testArithB(T: typedesc) =
+  let sym = ctx.newSym()
+  let im = $imm
   for reg in T.low..T.high:
-    let lit = "$1 $2, $3" % [inst, $reg, $imm]
+    let r = toLower($reg)
+    let lit = "$1 $2, $3" % [inst, r, im]
     ctx.lst.write lit & "\n"
-    ctx.nim.write "ctx.$1($2, $3)\n" % [niminst, $reg, $imm]
-    ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
-    
+    ctx.nim.write "  ($1, $2, \"$3\"),\n" % [r, im, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[2])\n"
+
 proc testArith(ctx: TestContext, inst, niminst: string, imm: int) =
   if imm <= 0xFF:
     testArithA(reg8)
@@ -325,145 +422,181 @@ proc testArith(ctx: TestContext, inst, niminst: string, imm: int) =
   elif imm > 0xFFFF:
     testArithB(reg32)
     testArithB(reg64)
-  
+
 template testArithC(T: typedesc) =
+  let sym = ctx.newSym()
+  let d = $disp
+  let im = $imm
   for reg in T.low..T.high:
-    let lit = "$1 $2 [$3 + $4], $5" % [inst, size, $reg, $disp, $imm]
+    let r = toLower($reg)
+    let lit = "$1 $2 [$3 + $4], $5" % [inst, size, r, d, im]
     ctx.lst.write lit & "\n"
-    ctx.nim.write "ctx.$1(nimjit.$2, $3, $4, $5)\n" % [niminst, size, $reg, $disp, $imm]
-    ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
- 
+    ctx.nim.write "  (nimjit.$1, $2, $3, $4, \"$5\"),\n" % [size, r, d, im, lit]
+    
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1], k[2], k[3])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[4])\n"
+
 template testArithCC(T: typedesc) =
+  let sym = ctx.newSym()
+  let d = $disp
+  let im = $imm
   for base in T.low..T.high:
+    let bs = toLower($base)
     for index in T.low..T.high:
+      let idx = toLower($index)
       for scale in {1, 2, 4, 8}:
         when T is reg32:
           if index == ESP: continue
         else:
           if index == RSP: continue
-        let lit = "$1 $2 [$3 + $4 * $5 + $6], $7" % [inst, size, $base, $index, $scale, $disp, $imm]
+        let sc = toLower($scale)
+        let lit = "$1 $2 [$3 + $4 * $5 + $6], $7" % [inst, size, bs, idx, sc, d, im]
         ctx.lst.write lit & "\n"
-        ctx.nim.write "ctx.$1(nimjit.$2, $3, $4, $5, $6, $7)\n" % [niminst, size, $base, $index, $scale, $disp, $imm]
-        ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
+        ctx.nim.write "  (nimjit.$1, $2, $3, $4, $5, $6, \"$7\"),\n" % [size, bs, idx, sc, d, im, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1], k[2], k[3], k[4], k[5])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[6])\n"
 
 template testArithD(T, TT: typedesc, size: expr) =
+  let sym = ctx.newSym()
+  let d = $disp
   for OP2 in TT.low..TT.high:
+    let op = toLower($OP2)
     for reg in T.low..T.high:
+      let r = toLower($reg)
       when TT is reg8 and T is reg64:
         if OP2 in {AH, CH, DH, BH} and reg >= R8: continue
       elif TT is reg8 and T is reg32:
         if OP2 in {AH, CH, DH, BH} and reg >= R8D: continue
-        
-      let lit = "$1 $2 [$3 + $4], $5" % [inst, size, $reg, $disp, $OP2]
+
+      let lit = "$1 $2 [$3 + $4], $5" % [inst, size, r, d, op]
       ctx.lst.write lit & "\n"
-      ctx.nim.write "ctx.$1(nimjit.$2, $3, $4, $5)\n" % [niminst, size, $reg, $disp, $OP2]
-      ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
- 
+      ctx.nim.write "  (nimjit.$1, $2, $3, $4, \"$5\"),\n" % [size, r, d, op, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1], k[2], k[3])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[4])\n"
+
 template testArithDD(T, TT: typedesc, size: expr) =
+  let sym = ctx.newSym()
+  let d = $disp
   for OP2 in TT.low..TT.high:
+    let op = toLower($OP2)
     for base in T.low..T.high:
+      let bs = toLower($base)
       for index in T.low..T.high:
+        let idx = toLoweR($index)
         for scale in {1, 2, 4, 8}:
           when T is reg32:
             if index == ESP: continue
           else:
             if index == RSP: continue
-            
+          let sc = $scale
+
           when TT is reg8 and T is reg64:
             if OP2 in {AH, CH, DH, BH} and index >= R8: continue
             if OP2 in {AH, CH, DH, BH} and base >= R8: continue
           elif TT is reg8 and T is reg32:
             if OP2 in {AH, CH, DH, BH} and index >= R8D: continue
             if OP2 in {AH, CH, DH, BH} and base >= R8D: continue
-            
-          let lit = "$1 $2 [$3 + $4 * $5 + $6], $7" % [inst, size, $base, $index, $scale, $disp, $OP2]
+
+          let lit = "$1 $2 [$3 + $4 * $5 + $6], $7" % [inst, size, bs, idx, sc, d, op]
           ctx.lst.write lit & "\n"
-          ctx.nim.write "ctx.$1(nimjit.$2, $3, $4, $5, $6, $7)\n" % [niminst, size, $base, $index, $scale, $disp, $OP2]
-          ctx.nim.write "ctx.add(\"$1\")\n" % [lit]
-        
+          ctx.nim.write "  (nimjit.$1, $2, $3, $4, $5, $6, \"$7\"),\n" % [size, bs, idx, sc, d, op, lit]
+
+  ctx.nim.write "]\n"
+  ctx.nim.write "for k in $1:\n" % [sym]
+  ctx.nim.write "  ctx.$1(k[0], k[1], k[2], k[3], k[4], k[5])\n" % [niminst]
+  ctx.nim.write "  ctx.add(k[6])\n"
+
 proc testArith(ctx: TestContext, inst, niminst, size: string, disp, imm: int) =
   testArithC(reg32)
   testArithC(reg64)
   testArithCC(reg32)
   testArithCC(reg64)
-  
+
 proc testArithMemRegA(ctx: TestContext, inst, niminst: string, disp: int) =
   testArithD(reg32, reg8, "byte")
   testArithD(reg32, reg16, "word")
   testArithD(reg32, reg32, "dword")
   testArithD(reg32, reg64, "qword")
 
-proc testArithMemRegB(ctx: TestContext, inst, niminst: string, disp: int) =  
+proc testArithMemRegB(ctx: TestContext, inst, niminst: string, disp: int) =
   testArithD(reg64, reg8, "byte")
   testArithD(reg64, reg16, "word")
   testArithD(reg64, reg32, "dword")
   testArithD(reg64, reg64, "qword")
 
-proc testArithMemRegC(ctx: TestContext, inst, niminst: string, disp: int) =  
-  beginTest(inst): 
+proc testArithMemRegC(ctx: TestContext, inst, niminst: string, disp: int) =
+  beginTest(inst):
     testArithDD(reg32, reg8, "byte")
     testArithDD(reg32, reg16, "word")
     testArithDD(reg32, reg32, "dword")
     testArithDD(reg32, reg64, "qword")
-  
+
 proc testArithMemRegD(ctx: TestContext, inst, niminst: string, disp: int) =
-  beginTest(inst): 
+  beginTest(inst):
     testArithDD(reg64, reg8, "byte")
     testArithDD(reg64, reg16, "word")
     testArithDD(reg64, reg32, "dword")
-    testArithDD(reg64, reg64, "qword") 
+    testArithDD(reg64, reg64, "qword")
 
 proc genArith(ctx: TestContext, inst, niminst: string) =
-  beginTest(inst):
-    ctx.testArith(inst, niminst, 0)
-    ctx.testArith(inst, niminst, 10)
-    ctx.testArith(inst, niminst, 3000)
-    ctx.testArith(inst, niminst, 300000)
-    
-  beginTest(inst):  
-    ctx.testArith(inst, niminst, "byte", 0, 0)
-    ctx.testArith(inst, niminst, "byte", 0, 10)
-    ctx.testArith(inst, niminst, "word", 0, 3000)
-    ctx.testArith(inst, niminst, "dword", 0, 300000)
-                                 
-    ctx.testArith(inst, niminst, "byte", 10, 0)
-    ctx.testArith(inst, niminst, "byte", 10, 10)
-    ctx.testArith(inst, niminst, "word", 10, 3000)
-    ctx.testArith(inst, niminst, "dword", 10, 300000)
-                                 
-    ctx.testArith(inst, niminst, "byte", 7000, 0)
-    ctx.testArith(inst, niminst, "byte", 7000, 10)
-    ctx.testArith(inst, niminst, "word", 7000, 3000)
-    ctx.testArith(inst, niminst, "dword", 7000, 300000)
+  #beginTest(inst):
+  #  ctx.testArith(inst, niminst, 0)
+  #  ctx.testArith(inst, niminst, 10)
+  #  ctx.testArith(inst, niminst, 3000)
+  #  ctx.testArith(inst, niminst, 300000)
+  #
+  #beginTest(inst):
+  #  ctx.testArith(inst, niminst, "byte", 0, 0)
+  #  ctx.testArith(inst, niminst, "byte", 0, 10)
+  #  ctx.testArith(inst, niminst, "word", 0, 3000)
+  #  ctx.testArith(inst, niminst, "dword", 0, 300000)
+  #
+  #  ctx.testArith(inst, niminst, "byte", 10, 0)
+  #  ctx.testArith(inst, niminst, "byte", 10, 10)
+  #  ctx.testArith(inst, niminst, "word", 10, 3000)
+  #  ctx.testArith(inst, niminst, "dword", 10, 300000)
+  #
+  #  ctx.testArith(inst, niminst, "byte", 7000, 0)
+  #  ctx.testArith(inst, niminst, "byte", 7000, 10)
+  #  ctx.testArith(inst, niminst, "word", 7000, 3000)
+  #  ctx.testArith(inst, niminst, "dword", 7000, 300000)
+  #
+  #beginTest(inst):
+  #  ctx.testArithMemRegA(inst, niminst, 0)
+  #  ctx.testArithMemRegA(inst, niminst, 100)
+  #  ctx.testArithMemRegA(inst, niminst, 7000)
+  #  ctx.testArithMemRegA(inst, niminst, 300000)
+  #
+  #  ctx.testArithMemRegB(inst, niminst, 0)
+  #  ctx.testArithMemRegB(inst, niminst, 100)
+  #  ctx.testArithMemRegB(inst, niminst, 7000)
+  #  ctx.testArithMemRegB(inst, niminst, 300000)
   
-  beginTest(inst): 
-    ctx.testArithMemRegA(inst, niminst, 0)
-    ctx.testArithMemRegA(inst, niminst, 100)
-    ctx.testArithMemRegA(inst, niminst, 7000)
-    ctx.testArithMemRegA(inst, niminst, 300000)
-    
-    ctx.testArithMemRegB(inst, niminst, 0)
-    ctx.testArithMemRegB(inst, niminst, 100)
-    ctx.testArithMemRegB(inst, niminst, 7000)
-    ctx.testArithMemRegB(inst, niminst, 300000)
-    
-  ctx.testArithMemRegC(inst, niminst, 0)
+  #ctx.testArithMemRegC(inst, niminst, 0)
   ctx.testArithMemRegC(inst, niminst, 100)
-  ctx.testArithMemRegC(inst, niminst, 7000)
-  ctx.testArithMemRegC(inst, niminst, 300000)
-  
-  ctx.testArithMemRegD(inst, niminst, 0)
-  ctx.testArithMemRegD(inst, niminst, 100)
+  #ctx.testArithMemRegC(inst, niminst, 7000)
+  #ctx.testArithMemRegC(inst, niminst, 300000)
+  #
+  #ctx.testArithMemRegD(inst, niminst, 0)
+  #ctx.testArithMemRegD(inst, niminst, 100)
   ctx.testArithMemRegD(inst, niminst, 7000)
-  ctx.testArithMemRegD(inst, niminst, 300000)
-    
-var ctx = newTest()
+  #ctx.testArithMemRegD(inst, niminst, 300000)
+
+var ctx = newTest("BITS64")
 #ctx.genSingleOperand("neg", "neg")
 #ctx.genSingleOperand("not", "`not`")
 #ctx.genSingleOperand("mul", "mul")
 #ctx.genSingleOperand("dec", "dec")
 #ctx.genSingleOperand("inc", "inc")
-
+#
 #ctx.genShift("rol", "rol")
 #ctx.genShift("ror", "ror")
 #ctx.genShift("rcl", "rcl")
@@ -474,10 +607,11 @@ var ctx = newTest()
 #ctx.genShift("sar", "sar")
 
 #ctx.genArith("add", "add")
-#ctx.genArith("or", "`or`")
-#ctx.genArith("adc", "adc")
-#ctx.genArith("sbb", "sbb")
-#ctx.genArith("and", "`and`")
-#ctx.genArith("sub", "sub")
-#ctx.genArith("xor", "`xor`")
-#ctx.genArith("cmp", "cmp")
+ctx.genArith("or", "`or`")
+ctx.genArith("adc", "adc")
+ctx.genArith("sbb", "sbb")
+ctx.genArith("and", "`and`")
+ctx.genArith("sub", "sub")
+ctx.genArith("xor", "`xor`")
+ctx.genArith("cmp", "cmp")
+
