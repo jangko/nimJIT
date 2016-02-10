@@ -102,6 +102,9 @@ genRegisters(regcr, REGCR)
 genRegisters(regdr, REGDR)
 genRegisters(regseg, REGSEG)
 
+proc reg*(r: int, t: regType): TReg {.inline.} =
+  result = TReg((t.int shl 8) or r)
+
 proc add(ctx: Assembler, inst: Instruction) =
   ctx.instList.add inst
 
@@ -167,7 +170,7 @@ proc listing*(ctx: Assembler, s: File) =
 
 #----------------------LISTING------------------------
 
-proc getRegType(opr: TReg): regType {.inline.} =
+proc getRegType*(opr: TReg): regType {.inline.} =
   result = regType((opr.int and 0xFF00) shr 8)
 
 proc getRegVal(opr: TReg): int {.inline.} =
@@ -576,7 +579,7 @@ macro arithGroup(inst: untyped, opMod, regMod: int): stmt =
           else:
             doAssert(imm <= 0xFFFFFFFF)
             ctx.appendDWord(imm and 0xFFFFFFFF)
-            
+
     proc `inst`*(ctx: Assembler, size: oprSize, opr: TReg, disp: int = 0, imm: int) =
       doAssert(getRegType(opr) in {REG32, REG64})
       ctx.emit(0x80 + (size != BYTE).int, `regMod`, size, opr, disp)
