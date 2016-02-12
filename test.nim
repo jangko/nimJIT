@@ -9,30 +9,6 @@ type
     startTime: float
     bits: asmFlag
 
-proc top*[T](ctx: TestContext): T =
-  when T is reg8:
-    result = if ctx.bits == BITS32: BH else: R15B
-  elif T is reg16:
-    result = if ctx.bits == BITS32: DI else: R15W
-  elif T is reg32:
-    result = if ctx.bits == BITS32: EDI else: R15D
-  elif T is reg64:
-    result = if ctx.bits == BITS32: RDI else: R15
-  elif T is regxmm:
-    result = if ctx.bits == BITS32: XMM7 else: XMM15
-  elif T is regymm:
-    result = if ctx.bits == BITS32: YMM7 else: YMM15
-  elif T is regcr:
-    result = if ctx.bits == BITS32: CR7 else: CR15
-  elif T is regdr:
-    result = if ctx.bits == BITS32: DR7 else: DR15
-  elif T is regfpu:
-    result = ST7
-  elif T is regmmx:
-    result = MMX7
-  elif T is regseg:
-    result = GS
-
 proc newTest(bits: asmFlag): TestContext =
   new(result)
   result.counter = 0
@@ -44,37 +20,38 @@ proc setName(ctx: TestContext, testName: string) =
 
 proc open(ctx: TestContext) =
   inc ctx.counter
-  ctx.lstName = "asm.asm"
   ctx.nimName = "asm.nim"
-
-  if not open(ctx.lst, ctx.lstName, fmWrite):
-    echo "cannot open ", ctx.lstName
-    quit(-1)
 
   if not open(ctx.nim, ctx.nimName, fmWrite):
     echo "cannot open ", ctx.nimName
     quit(-1)
 
-  ctx.nim.write "import nimjit, os, strutils\n"
+  ctx.nim.write "import nimjit, os, strutils, osproc\n"
+  ctx.nim.write "var ctx = newAssembler($1, true)\n" % [$ctx.bits]
+
+proc close(ctx: TestContext) =
   ctx.nim.write "var output: File\n"
   ctx.nim.write "if not open(output, paramStr(1), fmWrite):\n"
   ctx.nim.write "  echo \"cannot open \" & paramStr(1)\n"
   ctx.nim.write "  quit(-1)\n"
-  ctx.nim.write "var ctx = newAssembler($1, true)\n" % [$ctx.bits]
-
-proc close(ctx: TestContext) =
   ctx.nim.write "ctx.listing(output)\n"
-  ctx.lst.close()
-  ctx.nim.close()
+  ctx.nim.write "output.close\n"
+  ctx.nim.write "var source: File\n"
+  ctx.nim.write "if not open(source, paramStr(2), fmWrite):\n"
+  ctx.nim.write "  echo \"cannot open \" & paramStr(2)\n"
+  ctx.nim.write "  quit(-1)\n"
+  ctx.nim.write "ctx.asmSource(source)\n"
+  ctx.nim.write "source.close\n"
 
   let bits = if ctx.bits == BITS64: "win64" else: "win32"
-  var cmd = "nasm -f $1 -l nasmasm.lst $2" % [bits, ctx.lstName]
+  ctx.nim.write "var cmd = \"nasm -f $1 -l nasmasm.lst $$1\" % [paramStr(2)]\n" % [bits]
+  ctx.nim.write "if execShellCmd(cmd) != 0: quit(-1)\n"
+  ctx.nim.close()
+
+  var cmd = "nim c -d:release -o:njitasm.exe --verbosity:0 $1" % [ctx.nimName]
   if execShellCmd(cmd) != 0: quit(-1)
 
-  cmd = "nim c -d:release -o:njitasm.exe --verbosity:0 $1" % [ctx.nimName]
-  if execShellCmd(cmd) != 0: quit(-1)
-
-  cmd = "njitasm njitasm.lst"
+  cmd = "njitasm njitasm.lst asm.asm"
   if execShellCmd(cmd) != 0: quit(-1)
 
   ctx.lstName = "nasmasm.lst"
@@ -112,44 +89,52 @@ proc close(ctx: TestContext) =
 macro beginTest(name: string, n: typed): stmt =
   var glue = "ctx.setName($1)\n" % [$name]
   result = parseStmt(glue)
-  for c in n:
+
+  if n.kind == nnkStmtList:
+    for c in n:
+      result.add parseExpr("ctx.open()")
+      result.add c
+      result.add parseExpr("ctx.close()")
+  elif n.kind == nnkCall:
     result.add parseExpr("ctx.open()")
-    result.add c
+    result.add n
     result.add parseExpr("ctx.close()")
+  else:
+    echo n.treeRepr
+    error("unsupported test mode")
   #echo result.toStrLit.strVal
 
-include 
-  "test/singleop", "test/shiftgroup", "test/arithgroup",
+include "test/singleop", "test/shiftgroup", "test/arithgroup",
   "test/pushpopgroup"
 
 proc testSuite(bits: asmFlag) =
   var ctx = newTest(bits)
-  #ctx.genSingleOperand("neg", "neg")
-  #ctx.genSingleOperand("not", "`not`")
-  #ctx.genSingleOperand("mul", "mul")
-  #ctx.genSingleOperand("dec", "dec")
-  #ctx.genSingleOperand("inc", "inc")
+  #ctx.genSingleOperand("neg")
+  #ctx.genSingleOperand("`not`")
+  #ctx.genSingleOperand("mul")
+  #ctx.genSingleOperand("dec")
+  #ctx.genSingleOperand("inc")
 
-  #ctx.genShift("rol", "rol")
-  #ctx.genShift("ror", "ror")
-  #ctx.genShift("rcl", "rcl")
-  #ctx.genShift("rcr", "rcr")
-  #ctx.genShift("sal", "sal")
-  #ctx.genShift("shl", "`shl`")
-  #ctx.genShift("shr", "`shr`")
-  #ctx.genShift("sar", "sar")
-  
-  #ctx.genArith("add", "add")
-  #ctx.genArith("or", "`or`")
-  #ctx.genArith("adc", "adc")
-  #ctx.genArith("sbb", "sbb")
-  #ctx.genArith("and", "`and`")
-  #ctx.genArith("sub", "sub")
-  #ctx.genArith("xor", "`xor`")
-  #ctx.genArith("cmp", "cmp")
+  #ctx.genShift("rol")
+  #ctx.genShift("ror")
+  #ctx.genShift("rcl")
+  #ctx.genShift("rcr")
+  #ctx.genShift("sal")
+  #ctx.genShift("`shl`")
+  #ctx.genShift("`shr`")
+  #ctx.genShift("sar")
 
-  ctx.genPushPop("pop", "pop")
-  ctx.genPushPop("push", "push")
+  #ctx.genArith("add")
+  #ctx.genArith("`or`")
+  #ctx.genArith("adc")
+  #ctx.genArith("sbb")
+  #ctx.genArith("`and`")
+  #ctx.genArith("sub")
+  #ctx.genArith("`xor`")
+  ctx.genArith("cmp")
+
+  #ctx.genPushPop("pop")
+  #ctx.genPushPop("push")
 
 testSuite(BITS64)
 testSuite(BITS32)

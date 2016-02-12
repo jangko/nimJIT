@@ -1,36 +1,21 @@
-proc testPushPopA(ctx: TestContext, inst, niminst: string) =
-  genSingleOperandA(reg16, "REG16")
-  if ctx.bits == BITS32: genSingleOperandA(reg32, "REG32")
-  if ctx.bits == BITS64: genSingleOperandA(reg64, "REG64")
+proc testPushPopA(ctx: TestContext, inst: string) =
+  ctx.genSingleOperandA(inst, "REG16")
+  if ctx.bits == BITS32: ctx.genSingleOperandA(inst, "REG32")
+  if ctx.bits == BITS64: ctx.genSingleOperandA(inst, "REG64")
 
   if ctx.bits == BITS32:
-    ctx.lst.write "$1a\n" % [inst]
-    ctx.lst.write "$1ad\n" % [inst]
-
-    ctx.nim.write "ctx.$1a()\n" % [niminst]
-    ctx.nim.write "ctx.$1ad()\n" % [niminst]
+    ctx.nim.write "ctx.$1a()\n" % [inst]
+    ctx.nim.write "ctx.$1ad()\n" % [inst]
 
   if inst == "push":
-    ctx.lst.write "push byte 10\n"
-    ctx.lst.write "push word 1000\n"
-    ctx.lst.write "push dword 100000\n"
-
     ctx.nim.write "ctx.push(10)\n"
     ctx.nim.write "ctx.push(1000)\n"
     ctx.nim.write "ctx.push(100000)\n"
 
     if ctx.bits == BITS64:
-      ctx.lst.write "push FS\n"
-      ctx.lst.write "push GS\n"
       ctx.nim.write "ctx.push(FS)\n"
       ctx.nim.write "ctx.push(GS)\n"
     else:
-      ctx.lst.write "push CS\n"
-      ctx.lst.write "push SS\n"
-      ctx.lst.write "push DS\n"
-      ctx.lst.write "push ES\n"
-      ctx.lst.write "push FS\n"
-      ctx.lst.write "push GS\n"
       ctx.nim.write "ctx.push(CS)\n"
       ctx.nim.write "ctx.push(SS)\n"
       ctx.nim.write "ctx.push(DS)\n"
@@ -40,49 +25,48 @@ proc testPushPopA(ctx: TestContext, inst, niminst: string) =
 
   if inst == "pop":
     if ctx.bits == BITS64:
-      ctx.lst.write "pop FS\n"
-      ctx.lst.write "pop GS\n"
-
       ctx.nim.write "ctx.pop(FS)\n"
       ctx.nim.write "ctx.pop(GS)\n"
     else:
-      ctx.lst.write "pop DS\n"
-      ctx.lst.write "pop ES\n"
-      ctx.lst.write "pop SS\n"
-      ctx.lst.write "pop FS\n"
-      ctx.lst.write "pop GS\n"
-
       ctx.nim.write "ctx.pop(DS)\n"
       ctx.nim.write "ctx.pop(ES)\n"
       ctx.nim.write "ctx.pop(SS)\n"
       ctx.nim.write "ctx.pop(FS)\n"
       ctx.nim.write "ctx.pop(GS)\n"
 
-proc testPushPopB(ctx: TestContext, inst: string, niminst, size: string) =
-  genSingleOperandB(reg32, "REG32")
+proc testPushPopB(ctx: TestContext, inst: string, size: string) =
+  ctx.genSingleOperandB(inst, size, "REG32")
   if ctx.bits == BITS64:
-    genSingleOperandB(reg64, "REG64")
-  genSingleOperandBB(reg32, "REG32")
+    ctx.genSingleOperandB(inst, size, "REG64")
+  ctx.genSingleOperandBB(inst, size, "REG32")
   if ctx.bits == BITS64:
-    genSingleOperandBB(reg64, "REG64")
+    ctx.genSingleOperandBB(inst, size, "REG64")
 
-proc genPushPop(ctx: TestContext, inst, niminst: string) =
+proc genPushPop(ctx: TestContext, inst: string) =
   if ctx.bits == BITS64:
     beginTest(inst):
-      ctx.testPushPopA(inst, niminst)
-      ctx.testPushPopB(inst, niminst, "word")
-      ctx.testPushPopB(inst, niminst, "qword")
-      ctx.testSingleOperand(inst, niminst, "word", 10)
-      ctx.testSingleOperand(inst, niminst, "qword", 10)
-      ctx.testSingleOperand(inst, niminst, "word", 3000)
-      ctx.testSingleOperand(inst, niminst, "qword", 3000)
+      ctx.testPushPopA(inst)
+      ctx.testPushPopB(inst, "word")
+      ctx.testPushPopB(inst, "qword")
+      ctx.testSingleOperand(inst, "word", 10)
+      ctx.testSingleOperand(inst, "qword", 10)
+      ctx.testSingleOperand(inst, "word", 3000)
+      ctx.testSingleOperand(inst, "qword", 3000)
+      ctx.testSingleOperandD(inst, "word", 10)
+      ctx.testSingleOperandD(inst, "qword", 10)
+      ctx.testSingleOperandD(inst, "word", 300000)
+      ctx.testSingleOperandD(inst, "qword", 300000)
 
   if ctx.bits == BITS32:
     beginTest(inst):
-      ctx.testPushPopA(inst, niminst)
-      ctx.testPushPopB(inst, niminst, "word")
-      ctx.testPushPopB(inst, niminst, "dword")
-      ctx.testSingleOperand(inst, niminst, "word", 10)
-      ctx.testSingleOperand(inst, niminst, "dword", 10)
-      ctx.testSingleOperand(inst, niminst, "word", 3000)
-      ctx.testSingleOperand(inst, niminst, "dword", 3000)
+      ctx.testPushPopA(inst)
+      ctx.testPushPopB(inst, "word")
+      ctx.testPushPopB(inst, "dword")
+      ctx.testSingleOperand(inst, "word", 10)
+      ctx.testSingleOperand(inst, "dword", 10)
+      ctx.testSingleOperand(inst, "word", 3000)
+      ctx.testSingleOperand(inst, "dword", 3000)
+      ctx.testSingleOperandD(inst, "word", 10)
+      ctx.testSingleOperandD(inst, "dword", 10)
+      ctx.testSingleOperandD(inst, "word", 300000)
+      ctx.testSingleOperandD(inst, "dword", 300000)
