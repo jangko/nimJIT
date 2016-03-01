@@ -54,3 +54,4 @@ nimcache
 *.obj
 *.lst
 *.py
+*.o
