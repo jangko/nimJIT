@@ -114,7 +114,9 @@ proc testSuite(bits: asmFlag) =
   #ctx.genSingleOperand("mul")
   #ctx.genSingleOperand("dec")
   #ctx.genSingleOperand("inc")
-
+  #ctx.genSingleOperand("`div`")
+  #ctx.genSingleOperand("idiv")
+  
   #ctx.genShift("rol")
   #ctx.genShift("ror")
   #ctx.genShift("rcl")
@@ -131,7 +133,7 @@ proc testSuite(bits: asmFlag) =
   #ctx.genArith("`and`")
   #ctx.genArith("sub")
   #ctx.genArith("`xor`")
-  ctx.genArith("cmp")
+  #ctx.genArith("cmp")
 
   #ctx.genPushPop("pop")
   #ctx.genPushPop("push")

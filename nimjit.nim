@@ -614,6 +614,11 @@ singleOperandGroup(dec, 0xFE, 1, 0x48)
 singleOperandGroup(`not`, 0xF6, 2)
 singleOperandGroup(neg, 0xF6, 3)
 singleOperandGroup(mul, 0xF6, 4)
+singleOperandGroup(imul, 0xF6, 5)
+singleOperandGroup(`div`, 0xF6, 6)
+singleOperandGroup(idiv, 0xF6, 7)
+
+
 
 macro shiftGroup(inst: untyped, opCode, regMod: int): stmt =
   let ins = inst.deacc
@@ -671,7 +676,6 @@ macro arithGroup(inst: untyped, opMod, regMod: int): stmt =
   let ins = inst.deacc
   result = quote do:
     proc `inst`*(ctx: Assembler, opr: TReg, imm: int) =
-
       let oprVal = opr.int and 0xFF
       let oprType = regType((opr.int and 0xFF00) shr 8)
       if oprType == REG8:
@@ -927,6 +931,14 @@ proc oneByte(ctx: Assembler, opCode: int, lit: string) =
   ctx.add inst
   ctx.lit(lit)
 
+proc oneByteB(ctx: Assembler, opCode: int, lit: string, imm: int) =
+  var data = ""
+  data.add chr(opCode)
+  var inst = Instruction(data: data)
+  ctx.add inst
+  ctx.lit(lit, imm)
+  ctx.appendWord(imm and 0xFF)
+
 proc oneByteW(ctx: Assembler, opCode: int, lit: string, imm: int) =
   var data = ""
   data.add chr(opCode)
@@ -951,6 +963,15 @@ proc pushad*(ctx: Assembler) =
   doAssert(ctx.bits != BITS64)
   ctx.oneByte(0x60, "pushad")
 
+pushPopGroup(pop, 0x58)
+pushPopGroup(push, 0x50)
+pushPopGroup(pop, 0x8F, 0)
+pushPopGroup(push, 0xFF, 6)
+
+
+#misc group
+#retn, retf, retn iw, retf iw
+#int3, int0, int ib
 proc retn*(ctx: Assembler) =
   ctx.oneByte(0xC3, "retn")
 
@@ -969,7 +990,17 @@ proc retf*(ctx: Assembler, imm: int) =
     return
   ctx.oneByteW(0xCA, "retf", imm)
 
-pushPopGroup(pop, 0x58)
-pushPopGroup(push, 0x50)
-pushPopGroup(pop, 0x8F, 0)
-pushPopGroup(push, 0xFF, 6)
+proc int3*(ctx: Assembler) =
+  ctx.oneByte(0xCC, "int 3")
+  
+proc int0*(ctx: Assembler) =
+  ctx.oneByte(0xCE, "int0")
+
+proc intx*(ctx: Assembler, imm: int) =
+  ctx.oneByteB(0xCD, "int", imm)
+
+#xchg
+#lea
+#test
+#mov
+#jmp
