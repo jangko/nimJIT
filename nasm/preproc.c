@@ -880,7 +880,7 @@ static char *read_line(void)
      */
     buffer[strcspn(buffer, "\032")] = '\0';
 
-    list->line(LIST_READ, buffer);
+    list->line(LIST_READ, buffer, __LINE__);
 
     return buffer;
 }
@@ -4991,7 +4991,7 @@ static char *pp_getline(void)
                 }
                 istk->expansion = l->next;
                 nasm_free(l);
-                list->downlevel(LIST_MACRO);
+                list->downlevel(LIST_MACRO, __LINE__);
             }
         }
         while (1) {             /* until we get a line we can use */
@@ -5005,7 +5005,7 @@ static char *pp_getline(void)
                 istk->expansion = l->next;
                 nasm_free(l);
                 p = detoken(tline, false);
-                list->line(LIST_MACRO, p);
+                list->line(LIST_MACRO, p, __LINE__);
                 nasm_free(p);
                 break;
             }
@@ -5033,7 +5033,7 @@ static char *pp_getline(void)
                     nasm_free(src_set_fname(nasm_strdup(i->fname)));
                 }
                 istk = i->next;
-                list->downlevel(LIST_INCLUDE);
+                list->downlevel(LIST_INCLUDE, __LINE__);
                 nasm_free(i);
                 if (!istk)
                     return NULL;
@@ -5253,3 +5253,16 @@ struct preproc_ops nasmpp = {
     pp_pre_include,
     pp_include_path
 };
+
+void preproc_init(void) {
+  StackSize = 4;
+  StackPointer = "ebp";
+  ArgOffset = 8;
+  LocalOffset = 0;
+  ipath = NULL;
+  predef = NULL;
+  extrastdmac = NULL;
+  freeTokens = NULL;
+  blocks.next = NULL;
+  blocks.chunk = NULL;
+}

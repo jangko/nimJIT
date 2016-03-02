@@ -3,11 +3,30 @@
 
 #include <stdio.h>
 
-typedef struct XFILE XFILE;
+typedef enum {
+  NO_ERROR,
+  OPEN_ERROR,
+  WRITE_ERROR,
+  READ_ERROR
+} ERR_CODE;
 
-#define xstdout ((XFILE*) stdout)
-#define xstdin ((XFILE*) stdin)
-#define xstderr ((XFILE*) stderr)
+typedef struct XFILE {
+  int idx;
+  int bufsize;
+  ERR_CODE err;
+  int avail;
+  int size;
+  int pos;
+  int readMode;
+  char* body;
+  char* name;
+} XFILE;
+
+extern XFILE xfs[];
+
+#define xstdout (&xfs[0])
+#define xstdin  (&xfs[1])
+#define xstderr (&xfs[2])
 
 /*If the XFILE is successfully opened, the function returns a pointer to a XFILE object that can be used to identify the stream on future operations.
 Otherwise, a null pointer is returned.
@@ -115,4 +134,7 @@ int xungetc(int character, XFILE* stream);
 void xperror(const char* str);
 
 int xmain(int argc, char **argv);
+void init_nasm(void);
+void preproc_init(void);
+int nasm_call(int mode, const char* input, int insize, int* outsize, char** output);
 #endif

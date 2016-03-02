@@ -336,7 +336,7 @@ static void out(int64_t offset, int32_t segto, const void *data,
         type = OUT_RAWDATA;
     }
 
-    list->output(offset, data, type, size);
+    list->output(offset, data, type, size, __LINE__);
 
     /*
      * this call to src_get determines when we call the
@@ -463,12 +463,12 @@ int64_t assemble(int32_t segment, int64_t offset, int bits, iflag_t cp,
                  * Dummy call to list->output to give the offset to the
                  * listing module.
                  */
-                list->output(offset, NULL, OUT_RAWDATA, 0);
+                list->output(offset, NULL, OUT_RAWDATA, 0, __LINE__);
                 list->uplevel(LIST_TIMES);
             }
         }
         if (instruction->times > 1)
-            list->downlevel(LIST_TIMES);
+            list->downlevel(LIST_TIMES, __LINE__);
         return offset - start;
     }
 
@@ -502,7 +502,7 @@ int64_t assemble(int32_t segment, int64_t offset, int bits, iflag_t cp,
              * Dummy call to list->output to give the offset to the
              * listing module.
              */
-            list->output(offset, NULL, OUT_RAWDATA, 0);
+            list->output(offset, NULL, OUT_RAWDATA, 0, __LINE__);
             list->uplevel(LIST_INCBIN);
             while (t--) {
                 size_t l;
@@ -529,15 +529,15 @@ int64_t assemble(int32_t segment, int64_t offset, int bits, iflag_t cp,
                     l -= m;
                 }
             }
-            list->downlevel(LIST_INCBIN);
+            list->downlevel(LIST_INCBIN, __LINE__);
             if (instruction->times > 1) {
                 /*
                  * Dummy call to list->output to give the offset to the
                  * listing module.
                  */
-                list->output(offset, NULL, OUT_RAWDATA, 0);
+                list->output(offset, NULL, OUT_RAWDATA, 0, __LINE__);
                 list->uplevel(LIST_TIMES);
-                list->downlevel(LIST_TIMES);
+                list->downlevel(LIST_TIMES, __LINE__);
             }
             xfclose(fp);
             return instruction->times * len;
@@ -678,12 +678,12 @@ int64_t assemble(int32_t segment, int64_t offset, int bits, iflag_t cp,
                      * Dummy call to list->output to give the offset to the
                      * listing module.
                      */
-                    list->output(offset, NULL, OUT_RAWDATA, 0);
+                    list->output(offset, NULL, OUT_RAWDATA, 0, __LINE__);
                     list->uplevel(LIST_TIMES);
                 }
             }
         if (instruction->times > 1)
-            list->downlevel(LIST_TIMES);
+            list->downlevel(LIST_TIMES, __LINE__);
         return offset - start;
     } else {
         /* No match */

@@ -2102,3 +2102,19 @@ static int get_bits(char *value)
     }
     return i;
 }
+
+void init_nasm(void) {
+  maxbits = 0;
+  globalrel = 0;
+  globalbnd = 0;
+  ofmt = &OF_DEFAULT;
+  ofmt_alias = NULL;
+  ofile = NULL;
+  optimizing = MAX_OPTIMIZE;
+  cmd_sb = 16;
+  depend_emit_phony = false;
+  depend_missing_ok = false;
+  depend_target = NULL;
+  depend_file = NULL;
+  user_nolist = 0;
+}

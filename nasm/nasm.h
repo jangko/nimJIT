@@ -154,7 +154,7 @@ typedef struct {
      * work with when doing things like uplevel(LIST_TIMES) or
      * uplevel(LIST_INCBIN).
      */
-    void (*output)(int32_t offset, const void *data, enum out_type type, uint64_t size);
+    void (*output)(int32_t offset, const void *data, enum out_type type, uint64_t size, int line);
 
     /*
      * Called to send a text line to the listing generator. The
@@ -162,7 +162,7 @@ typedef struct {
      * whether the line came directly from an input file or is the
      * result of a multi-line macro expansion.
      */
-    void (*line)(int type, char *line);
+    void (*line)(int type, char *line, int lnx);
 
     /*
      * Called to change one of the various levelled mechanisms in
@@ -182,7 +182,7 @@ typedef struct {
     /*
      * Reverse the effects of uplevel.
      */
-    void (*downlevel)(int type);
+    void (*downlevel)(int type, int lnx);
 
     /*
      * Called on a warning or error, with the error message.

@@ -55,3 +55,4 @@ nimcache
 *.lst
 *.py
 *.o
+*.dll

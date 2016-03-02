@@ -133,7 +133,7 @@ static char *nop_getline(void)
         break;
     }
 
-    nop_list->line(LIST_READ, buffer);
+    nop_list->line(LIST_READ, buffer, __LINE__);
 
     return buffer;
 }

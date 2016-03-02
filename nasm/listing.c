@@ -82,7 +82,7 @@ static int listlevel, listlevel_e;
 
 static XFILE *listfp;
 
-static void list_emit(void)
+static void list_emit(int line)
 {
     int i;
 
@@ -97,9 +97,10 @@ static void list_emit(void)
     else
         xfprintf(listfp, "%*s", LIST_HEXBIT + 10, "");
 
-    if (listlevel_e)
-        xfprintf(listfp, "%s<%d>", (listlevel < 10 ? " " : ""),
+    if (listlevel_e) {
+        xfprintf(listfp, "%s<%d>", (listlevel < 10 ? "X" : ""),
                 listlevel_e);
+    }
     else if (listlinep)
         xfprintf(listfp, "    ");
 
@@ -115,9 +116,10 @@ static void list_emit(void)
 	for (i = 0; i < LIST_HEXBIT; i++)
 	    xputc('*', listfp);
 	
-	if (listlevel_e)
+	if (listlevel_e) {
 	    xfprintf(listfp, " %s<%d>", (listlevel < 10 ? " " : ""),
 		    listlevel_e);
+  }
 	else
 	    xfprintf(listfp, "     ");
 
@@ -145,6 +147,9 @@ static void list_init(char *fname, efunc error)
     mistack->next = NULL;
     mistack->level = 0;
     mistack->inhibiting = true;
+    listlevel_e = 0;
+    listdata[0] = 0;
+    listlinep = false;
 }
 
 static void list_cleanup(void)
@@ -158,15 +163,17 @@ static void list_cleanup(void)
         nasm_free(temp);
     }
 
-    list_emit();
+    list_emit(__LINE__);
     xfclose(listfp);
+    listfp = 0;
+    mistack = 0;
 }
 
 static void list_out(int32_t offset, char *str)
 {
     if (strlen(listdata) + strlen(str) > LIST_HEXBIT) {
         strcat(listdata, "-");
-        list_emit();
+        list_emit(__LINE__);
     }
     if (!listdata[0])
         listoffset = offset;
@@ -193,11 +200,11 @@ static void list_address(int32_t offset, const char *brackets,
 }
 
 static void list_output(int32_t offset, const void *data,
-			enum out_type type, uint64_t size)
+			enum out_type type, uint64_t size, int line)
 {
     char q[20];
 
-    if (!listp || suppress || user_nolist)      /* fbk - 9/2/00 */
+     if (!listp || suppress || user_nolist)      /* fbk - 9/2/00 */
         return;
 
     switch (type) {
@@ -239,7 +246,7 @@ static void list_output(int32_t offset, const void *data,
     }
 }
 
-static void list_line(int type, char *line)
+static void list_line(int type, char *line, int lnx)
 {
     if (!listp)
         return;
@@ -257,7 +264,7 @@ static void list_line(int type, char *line)
             nasm_free(temp);
         }
     }
-    list_emit();
+    list_emit(__LINE__);
     listlinep = true;
     strncpy(listline, line, LIST_MAX_LEN - 1);
     listline[LIST_MAX_LEN - 1] = '\0';
@@ -273,7 +280,7 @@ static void list_uplevel(int type)
         list_out(listoffset, type == LIST_INCBIN ? "<incbin>" : "<rept>");
         return;
     }
-
+    
     listlevel++;
 
     if (mistack && mistack->inhibiting && type == LIST_INCLUDE) {
@@ -291,7 +298,7 @@ static void list_uplevel(int type)
     }
 }
 
-static void list_downlevel(int type)
+static void list_downlevel(int type, int lnx)
 {
     if (!listp)
         return;
@@ -317,7 +324,7 @@ static void list_error(int severity, const char *pfx, const char *msg)
     snprintf(listerror, sizeof listerror, "%s%s", pfx, msg);
 
     if ((severity & ERR_MASK) >= ERR_FATAL)
-	list_emit();
+	list_emit(__LINE__);
 }
 
 

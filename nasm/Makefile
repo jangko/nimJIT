@@ -98,10 +98,11 @@ NDISASM = xstdio.$(O)  ndisasm.$(O) disasm.$(O) sync.$(O) nasmlib.$(O) ver.$(O) 
 	disp8.$(O) iflag.$(O)
 #-- End File Lists --#
 
-all: nasm$(X) ndisasm$(X) 
+all: nasm$(X) 
 
 nasm$(X): $(NASM) $(XOBJS)
 	$(CC) $(LDFLAGS) -o nasm$(X) $(NASM) $(XOBJS) $(LIBS)
+	mv nasm$(X) ../nasm$(X)
 
 ndisasm$(X): $(NDISASM) $(XOBJS)
 	$(CC) $(LDFLAGS) -o ndisasm$(X) $(NDISASM) $(XOBJS) $(LIBS)
@@ -439,3 +440,4 @@ tokhash.$(O): tokhash.c compiler.h config.h directiv.h hashtbl.h iflag.h \
  regs.h stdscan.h tables.h tokens.h
 ver.$(O): ver.c compiler.h config.h directiv.h insnsi.h nasm.h nasmlib.h \
  opflags.h pptok.h preproc.h regs.h tables.h version.h
+xstdio.$(O): xstdio.c xstdio.h
