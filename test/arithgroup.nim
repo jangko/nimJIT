@@ -1,12 +1,12 @@
-proc testArithA(ctx: TestContext, inst: string, imm: int, r, size: string) =
+proc testArithA(ctx: TestContext, inst: string, imm: BiggestInt, r, size: string) =
   ctx.nim.write "for reg in $1.low..top[$1](ctx):\n" % [toLower(r)]
   ctx.nim.write "  ctx.$1(TReg(($2.int shl 8) or reg.int), $3)\n" % [inst, r, $imm]
 
-proc testArithB(ctx: TestContext, inst: string, imm: int, r: string) =
+proc testArithB(ctx: TestContext, inst: string, imm: BiggestInt, r: string) =
   ctx.nim.write "for reg in $1.low..top[$1](ctx):\n" % [toLower(r)]
   ctx.nim.write "  ctx.$1(TReg(($2.int shl 8) or reg.int), $3)\n" % [inst, r, $imm]
 
-proc testArith(ctx: TestContext, inst: string, imm: int) =
+proc testArith(ctx: TestContext, inst: string, imm: BiggestInt) =
   if imm <= 0xFF:
     ctx.testArithA(inst, imm, "REG8", "byte")
     ctx.testArithA(inst, imm, "REG16", "word")
@@ -198,4 +198,3 @@ proc genArith(ctx: TestContext, inst: string) =
     ctx.testArithMemRegF(inst, 10)
     ctx.testArithMemRegF(inst, 7000)
     ctx.testArithMemRegF(inst, 300000)
-

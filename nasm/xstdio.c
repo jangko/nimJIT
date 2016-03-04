@@ -88,7 +88,7 @@ XFILE* xfopen(const char* fname, const char* mode) {
     while(*mode) {
       if(*mode == 'w') {
         stream->readMode = 0;
-        stream->bufsize = 4096;
+        stream->bufsize = 0x80000;
         stream->size = 0;
         stream->body = nasm_malloc(stream->bufsize);
         stream->avail = 1;
@@ -121,7 +121,7 @@ XFILE* xfopen(const char* fname, const char* mode) {
       while(*mode) {
         if(*mode == 'w') {
           stream->readMode = 0;
-          stream->bufsize = 4096;
+          stream->bufsize = 0x80000;
           stream->size = 0;
           stream->body = nasm_malloc(stream->bufsize);
           stream->avail = 1;
@@ -159,8 +159,8 @@ int xfputs(const char* str, XFILE* stream) {
       return EOF;
     }
     
-    if(stream->pos + len > stream->bufsize) {
-      stream->bufsize += 4096;
+    if(stream->pos + len >= stream->bufsize) {
+      stream->bufsize += 0x80000;
       stream->body = nasm_realloc(stream->body, stream->bufsize);
     }
     
@@ -185,8 +185,8 @@ int xputc(int c, XFILE* stream) {
       return EOF;
     }
     
-    if(stream->pos + 1 > stream->bufsize) {
-      stream->bufsize += 4096;
+    if(stream->pos + 1 >= stream->bufsize) {
+      stream->bufsize += 0x80000;
       stream->body = nasm_realloc(stream->body, stream->bufsize);
     }
     
@@ -226,8 +226,10 @@ int xfprintf(XFILE* stream, const char* format, ...) {
       /*if(stream->idx == 3) {
         printf("STDERR2: %s\n", buf);
       }*/
-      if(stream->pos + ret > stream->bufsize) {
-        stream->bufsize += 4096;
+      
+      /*printf("%d %d\n", stream->pos, stream->size);*/
+      if(stream->pos + ret >= stream->bufsize) {
+        stream->bufsize += 0x80000;
         stream->body = nasm_realloc(stream->body, stream->bufsize);
       }
       memcpy(&stream->body[stream->pos], buf, ret);
@@ -279,8 +281,8 @@ size_t xfwrite(const void * ptr, size_t size, size_t count, XFILE* stream) {
     }
       
     if(len > 0) {
-      if(stream->pos + len > stream->bufsize) {
-        stream->bufsize += 4096;
+      if(stream->pos + len >= stream->bufsize) {
+        stream->bufsize += 0x80000;
         stream->body = nasm_realloc(stream->body, stream->bufsize);
       }
       memcpy(&stream->body[stream->pos], ptr, len);
@@ -464,8 +466,8 @@ int xvfprintf(XFILE* stream, const char* format, va_list arg) {
     ret = vsprintf(buf, format, arg);
 
     if(ret > 0) {
-      if(stream->pos + ret > stream->bufsize) {
-        stream->bufsize += 4096;
+      if(stream->pos + ret >= stream->bufsize) {
+        stream->bufsize += 0x80000;
         stream->body = nasm_realloc(stream->body, stream->bufsize);
       }
       memcpy(&stream->body[stream->pos], buf, ret);
@@ -527,6 +529,7 @@ void xperror(const char* str) {
   perror(str);
 }
 
+static int debug_on2 = 0;
 int nasm_call(int mode, const char* input, int insize, int* outsize, char** output) {
   int result;
   int argc = 8;
@@ -547,20 +550,20 @@ int nasm_call(int mode, const char* input, int insize, int* outsize, char** outp
   
   /*printf("%d: %s\n", insize, input);*/
   
-  if(debug_on) printf("ok1\n");
+  if(debug_on2) printf("ok1\n");
   deinit_xstdio();
   
-  if(debug_on) printf("ok2\n");
+  if(debug_on2) printf("ok2\n");
   init_xstdio(input, insize);
   
-  if(debug_on) printf("ok3\n");
+  if(debug_on2) printf("ok3\n");
   init_nasm();
   preproc_init();
   
-  if(debug_on) printf("ok4\n");
+  if(debug_on2) printf("ok4\n");
   result = xmain(argc, argv);
   
-  if(debug_on) printf("ok5\n");
+  if(debug_on2) printf("ok5\n");
  
   *outsize = stream->size;
   *output = stream->body;

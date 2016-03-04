@@ -1,4 +1,4 @@
-import strutils, macros
+import strutils, macros, streams
 
 type
   reg8* = enum
@@ -49,7 +49,7 @@ type
   TReg* = distinct int
 
   oprSize* = enum
-    BYTE, WORD, DWORD, QWORD
+    BYTE, WORD, DWORD, QWORD, TWORD, OWORD, YWORD, ZWORD
 
   asmFlag* = enum
     BITS32, BITS64
@@ -138,6 +138,21 @@ proc top*[T](ctx: Assembler): T =
   elif T is regseg:
     result = GS
 
+proc typeToSize(r: regType): oprSize =
+  case r
+  of REG8: result = BYTE
+  of REG16: result = WORD
+  of REG32: result = DWORD
+  of REG64: result = QWORD
+  of REGFPU: result = TWORD
+  of REGMMX: result = QWORD
+  of REGXMM: result = OWORD
+  of REGYMM: result = YWORD
+  of REGCR: result = DWORD
+  of REGDR: result = DWORD
+  of REGSEG: result = WORD
+  of REGMOD: doAssert(false)
+  
 #----------------------LISTING------------------------
 proc padr(w, line: int): string =
   var numstr = $line
@@ -197,6 +212,18 @@ proc appendDWord(ctx: Assembler, imm: int) =
   inst.data.add chr((imm and 0x00FF0000) shr 16)
   inst.data.add chr((imm and 0xFF000000) shr 24)
 
+proc appendQWord(ctx: Assembler, imm: int64) =
+  var inst = ctx.instList[ctx.instList.len-1]
+  let s = cast[cstring](unsafeAddr(imm))
+  inst.data.add s[0]
+  inst.data.add s[1]
+  inst.data.add s[2]
+  inst.data.add s[3]
+  inst.data.add s[4]
+  inst.data.add s[5]
+  inst.data.add s[6]
+  inst.data.add s[7]
+
 proc newAssembler*(bits: asmFlag, genListing: bool = false): Assembler =
   new(result)
   result.instList = @[]
@@ -231,7 +258,7 @@ proc emit(ctx: Assembler, opcode: int, opr, opr2: TReg) =
   splitReg()
   let opr2Type = getRegType(opr2)
   if opr2Type != REGMOD:
-    doAssert(oprType == opr2Type)
+    if oprType != REGSEG and opr2Type != REGSEG: doAssert(oprType == opr2Type)
 
   var data = ""
   if oprType == REG16 and ctx.bits in {BITS64, BITS32}:
@@ -275,9 +302,10 @@ proc emit(ctx: Assembler, opcode: int, size: oprSize, opr: TReg, disp: int, opr2
     doAssert(getRegType(opr2) != REG64)
     doAssert(getRegVal(opr2) < 0x08)
 
+  let opr2Type = getRegType(opr2)
   doAssert(oprType in {REG32, REG64})
-  doAssert(getRegType(opr2) in {REG8, REG16, REG32, REG64, REGMOD})
-  if size == WORD: data.add chr(0x66)
+  doAssert(opr2Type in {REG8, REG16, REG32, REG64, REGMOD, REGSEG})
+  if size == WORD and opr2Type != REGSEG: data.add chr(0x66)
   if oprType == REG32 and ctx.bits == BITS64: data.add chr(0x67)
 
   if oprVal >= 0x08:
@@ -360,9 +388,11 @@ proc emitBase(ctx: Assembler, opcode: int, size: oprSize, base, index: TReg, sca
     doAssert(baseType == indexType)
   doAssert(indexType in {REG32, REG64})
   doAssert(scale in {1, 2, 4, 8})
-  doAssert(getRegType(opr2) in {REG8, REG16, REG32, REG64, REGMOD})
+  
+  let opr2Type = getRegType(opr2)
+  doAssert(opr2Type in {REG8, REG16, REG32, REG64, REGMOD, REGSEG})
   doAssert(indexVal != 0x04) #ESP or RSP
-  if size == WORD: data.add chr(0x66)
+  if size == WORD and opr2Type != REGSEG: data.add chr(0x66)
   if indexType == REG32 and ctx.bits == BITS64: data.add chr(0x67)
 
   if baseVal >= 0x08:
@@ -476,7 +506,7 @@ proc toStr(opr: TReg): string =
   of REGSEG: result = $regseg(val)
   else: result = $val
 
-proc toStr(opr: int): string =
+proc toStr(opr: BiggestInt): string =
   result = $opr
 
 proc lit(ctx: Assembler, ins: string, opr: TReg) =
@@ -512,7 +542,7 @@ proc lit(ctx: Assembler, ins: string, size: oprSize, base, index: TReg, scale, d
     else:
       ctx.add "$1 $2 [$3$4 * $5 + $6]" % [ins, toLower($size), basex, toStr(index), $scale, $disp]
 
-proc lit[B: int | TReg](ctx: Assembler, ins: string, opr: TReg, imm: B) =
+proc lit[B: int64 | int | TReg](ctx: Assembler, ins: string, opr: TReg, imm: B) =
   if not ctx.genListing: return
   ctx.add "$1 $2, $3" % [ins, toStr(opr), toStr(imm)]
 
@@ -570,6 +600,27 @@ proc lit(ctx: Assembler, ins: string, opr: TReg, size: oprSize, base, index: TRe
     else:
       ctx.add "$1 $7, $2 [$3$4 * $5 + $6]" % [ins, toLower($size), basex, toStr(index), $scale, $disp, toStr(opr)]
 
+proc lit(ctx: Assembler, ins: string, opr1, opr2: TReg, disp: int) =
+  if not ctx.genListing: return
+  if disp == 0:
+    ctx.add "$1 $2, [$3]" % [ins, toStr(opr1), toStr(opr2)]
+  else:
+    ctx.add "$1 $2, [$3 + $4]" % [ins, toStr(opr1), toStr(opr2), $disp]
+
+proc lit(ctx: Assembler, ins: string, opr: TReg, base, index: TReg, scale, disp: int) =
+  let basex = if isAvailable(base): toStr(base) & " + " else: ""
+  if not ctx.genListing: return
+  if disp == 0:
+    if scale == 0:
+      ctx.add "$1 $2, [$3$4]" % [ins, toStr(opr), basex, toStr(index)]
+    else:
+      ctx.add "$1 $2, [$3$4 * $5]" % [ins, toStr(opr), basex, toStr(index), $scale]
+  else:
+    if scale == 0:
+      ctx.add "$1 $2, [$3$4 + $5]" % [ins, toStr(opr), basex, toStr(index), $disp]
+    else:
+      ctx.add "$1 $2, [$3$4 * $5 + $6]" % [ins, toStr(opr), basex, toStr(index), $scale, $disp]
+      
 macro singleOperandGroup(inst: untyped, opCode, regMod: int, opCode2: int = 0): stmt =
   let ins = inst.deacc
   if opCode2.intVal != 0:
@@ -617,8 +668,6 @@ singleOperandGroup(mul, 0xF6, 4)
 singleOperandGroup(imul, 0xF6, 5)
 singleOperandGroup(`div`, 0xF6, 6)
 singleOperandGroup(idiv, 0xF6, 7)
-
-
 
 macro shiftGroup(inst: untyped, opCode, regMod: int): stmt =
   let ins = inst.deacc
@@ -672,6 +721,75 @@ shiftGroup(`shl`, 0xC0, 4)
 shiftGroup(`shr`, 0xC0, 5)
 shiftGroup(sar, 0xC0, 7)
 
+proc stdRMREG(ctx: Assembler, inst: string, opCode: int, size: oprSize, opr1: TReg, disp: int, opr2: TReg) =
+  ctx.lit(inst, size, opr1, disp, opr2)
+  let opr2Type = getRegType(opr2)
+  doAssert(getRegType(opr1) in {REG32, REG64})
+  doAssert(opr2Type in {REG8, REG16, REG32, REG64})
+  if opr2Type == REG8: doAssert(size == BYTE)
+  elif opr2Type == REG16: doAssert(size == WORD)
+  elif opr2Type == REG32: doAssert(size == DWORD)
+  else: doAssert(size == QWORD)
+  ctx.emit(opCode, size, opr1, disp, opr2)
+
+proc stdREGRM(ctx: Assembler, inst: string, opCode: int, opr1, opr2: TReg, size: oprSize, disp: int) =
+  ctx.lit(inst, opr1, opr2, size, disp)
+  let opr2Type = getRegType(opr2)
+  doAssert(getRegType(opr1) in {REG32, REG64})
+  doAssert(opr2Type in {REG8, REG16, REG32, REG64})
+  if opr2Type == REG8: doAssert(size == BYTE)
+  elif opr2Type == REG16: doAssert(size == WORD)
+  elif opr2Type == REG32: doAssert(size == DWORD)
+  else: doAssert(size == QWORD)
+  ctx.emit(opCode, size, opr2, disp, opr1)
+ 
+proc stdRMREG(ctx: Assembler, inst: string, opCode: int, size: oprSize, base, index: TReg, scale, disp: int, opr2: TReg) =
+  ctx.lit(inst, size, base, index, scale, disp, opr2)
+  let opr2Type = getRegType(opr2)
+  doAssert(opr2Type in {REG8, REG16, REG32, REG64})
+  if opr2Type == REG8: doAssert(size == BYTE)
+  elif opr2Type == REG16: doAssert(size == WORD)
+  elif opr2Type == REG32: doAssert(size == DWORD)
+  else: doAssert(size == QWORD)
+  ctx.emit(opCode, size, base, index, scale, disp, opr2)
+      
+proc stdREGRM(ctx: Assembler, inst: string, opCode: int, opr1: TReg, size: oprSize, base, index: TReg, scale, disp: int) =
+  ctx.lit(inst, opr1, size, base, index, scale, disp)
+  let opr1Type = getRegType(opr1)
+  doAssert(opr1Type in {REG8, REG16, REG32, REG64})
+  if opr1Type == REG8: doAssert(size == BYTE)
+  elif opr1Type == REG16: doAssert(size == WORD)
+  elif opr1Type == REG32: doAssert(size == DWORD)
+  else: doAssert(size == QWORD)
+  ctx.emit(opCode, size, base, index, scale, disp, opr1)
+
+proc stdRMIMM(ctx: Assembler, inst: string, opCode, regMod: int, size: oprSize, opr: TReg, disp, imm: int) =
+  ctx.lit(inst, size, opr, disp, imm)
+  doAssert(getRegType(opr) in {REG32, REG64})
+  ctx.emit(opCode, size, opr, disp, reg(regMod, REGMOD))
+  if size == BYTE:
+    doAssert(imm <= 0xFF)
+    ctx.appendChar chr(imm and 0xFF)
+  elif size == WORD:
+    doAssert(imm <= 0xFFFF)
+    ctx.appendWord(imm and 0xFFFF)
+  else:
+    doAssert(imm <= 0xFFFFFFFF)
+    ctx.appendDWord(imm and 0xFFFFFFFF)
+
+proc stdRMIMM(ctx: Assembler, inst: string, opCode, regMod: int, size: oprSize, base, index: TReg, scale, disp: int, imm: int) =
+  ctx.lit(inst, size, base, index, scale, disp, imm)
+  ctx.emit(opCode, size, base, index, scale, disp, reg(regMod, REGMOD))
+  if size == BYTE:
+    doAssert(imm <= 0xFF)
+    ctx.appendChar chr(imm and 0xFF)
+  elif size == WORD:
+    doAssert(imm <= 0xFFFF)
+    ctx.appendWord(imm and 0xFFFF)
+  else:
+    doAssert(imm <= 0xFFFFFFFF)
+    ctx.appendDWord(imm and 0xFFFFFFFF)
+        
 macro arithGroup(inst: untyped, opMod, regMod: int): stmt =
   let ins = inst.deacc
   result = quote do:
@@ -717,76 +835,25 @@ macro arithGroup(inst: untyped, opMod, regMod: int): stmt =
             ctx.appendDWord(imm and 0xFFFFFFFF)
 
     proc `inst`*(ctx: Assembler, size: oprSize, opr: TReg, disp, imm: int) =
-      ctx.lit(`ins`, size, opr, disp, imm)
-      doAssert(getRegType(opr) in {REG32, REG64})
-      ctx.emit(0x80 + (size != BYTE).int, size, opr, disp, reg(`regMod`, REGMOD))
-      if size == BYTE:
-        doAssert(imm <= 0xFF)
-        ctx.appendChar chr(imm and 0xFF)
-      elif size == WORD:
-        doAssert(imm <= 0xFFFF)
-        ctx.appendWord(imm and 0xFFFF)
-      else:
-        doAssert(imm <= 0xFFFFFFFF)
-        ctx.appendDWord(imm and 0xFFFFFFFF)
-
+      ctx.stdRMIMM(`ins`, 0x80 + (size != BYTE).int, `regMod`, size, opr, disp, imm)
+      
     proc `inst`*(ctx: Assembler, size: oprSize, opr1: TReg, disp: int, opr2: TReg) =
-      ctx.lit(`ins`, size, opr1, disp, opr2)
-      let opr2Type = getRegType(opr2)
-      doAssert(getRegType(opr1) in {REG32, REG64})
-      doAssert(opr2Type in {REG8, REG16, REG32, REG64})
-      if opr2Type == REG8: doAssert(size == BYTE)
-      elif opr2Type == REG16: doAssert(size == WORD)
-      elif opr2Type == REG32: doAssert(size == DWORD)
-      else: doAssert(size == QWORD)
-      ctx.emit(0x00 + (size != BYTE).int + `opMod`, size, opr1, disp, opr2)
-
+      ctx.stdRMREG(`ins`, 0x00 + (size != BYTE).int + `opMod`, size, opr1, disp, opr2)
+      
     proc `inst`*(ctx: Assembler, opr1, opr2: TReg, size: oprSize, disp: int) =
-      ctx.lit(`ins`, opr1, opr2, size, disp)
-      let opr2Type = getRegType(opr2)
-      doAssert(getRegType(opr1) in {REG32, REG64})
-      doAssert(opr2Type in {REG8, REG16, REG32, REG64})
-      if opr2Type == REG8: doAssert(size == BYTE)
-      elif opr2Type == REG16: doAssert(size == WORD)
-      elif opr2Type == REG32: doAssert(size == DWORD)
-      else: doAssert(size == QWORD)
-      ctx.emit(0x02 + (size != BYTE).int + `opMod`, size, opr2, disp, opr1)
+      ctx.stdREGRM(`ins`, 0x02 + (size != BYTE).int + `opMod`, opr1, opr2, size, disp)
 
     proc `inst`*(ctx: Assembler, size: oprSize, base, index: TReg, scale, disp: int, imm: int) =
-      ctx.lit(`ins`, size, base, index, scale, disp, imm)
-      ctx.emit(0x80 + (size != BYTE).int, size, base, index, scale, disp, reg(`regMod`, REGMOD))
-      if size == BYTE:
-        doAssert(imm <= 0xFF)
-        ctx.appendChar chr(imm and 0xFF)
-      elif size == WORD:
-        doAssert(imm <= 0xFFFF)
-        ctx.appendWord(imm and 0xFFFF)
-      else:
-        doAssert(imm <= 0xFFFFFFFF)
-        ctx.appendDWord(imm and 0xFFFFFFFF)
-
+      ctx.stdRMIMM(`ins`, 0x80 + (size != BYTE).int, `regMod`, size, base, index, scale, disp, imm)
+      
     proc `inst`*(ctx: Assembler, size: oprSize, base, index: TReg, scale, disp: int, opr2: TReg) =
-      ctx.lit(`ins`, size, base, index, scale, disp, opr2)
-      let opr2Type = getRegType(opr2)
-      doAssert(opr2Type in {REG8, REG16, REG32, REG64})
-      if opr2Type == REG8: doAssert(size == BYTE)
-      elif opr2Type == REG16: doAssert(size == WORD)
-      elif opr2Type == REG32: doAssert(size == DWORD)
-      else: doAssert(size == QWORD)
-      ctx.emit(0x00 + (size != BYTE).int + `opMod`, size, base, index, scale, disp, opr2)
+      ctx.stdRMREG(`ins`, 0x00 + (size != BYTE).int + `opMod`, size, base, index, scale, disp, opr2)
 
     proc `inst`*[B: int | TReg](ctx: Assembler, size: oprSize, index: TReg, scale, disp: int, imm: B) =
       ctx.`inst`(size, NA, index, scale, disp, imm)
 
     proc `inst`*(ctx: Assembler, opr1: TReg, size: oprSize, base, index: TReg, scale, disp: int) =
-      ctx.lit(`ins`, opr1, size, base, index, scale, disp)
-      let opr1Type = getRegType(opr1)
-      doAssert(opr1Type in {REG8, REG16, REG32, REG64})
-      if opr1Type == REG8: doAssert(size == BYTE)
-      elif opr1Type == REG16: doAssert(size == WORD)
-      elif opr1Type == REG32: doAssert(size == DWORD)
-      else: doAssert(size == QWORD)
-      ctx.emit(0x02 + (size != BYTE).int + `opMod`, size, base, index, scale, disp, opr1)
+      ctx.stdREGRM(`ins`, 0x02 + (size != BYTE).int + `opMod`, opr1, size, base, index, scale, disp)
 
     proc `inst`*(ctx: Assembler, opr1: TReg, size: oprSize, index: TReg, scale, disp: int) =
       ctx.`inst`(opr1, size, NA, index, scale, disp)
@@ -999,8 +1066,185 @@ proc int0*(ctx: Assembler) =
 proc intx*(ctx: Assembler, imm: int) =
   ctx.oneByteB(0xCD, "int", imm)
 
+proc lea*(ctx: Assembler, opr1, opr2: TReg, disp: int) =
+  let opr1Type = getRegType(opr1)
+  if ctx.bits == BITS64:
+    doAssert(opr1Type in {REG16, REG32, REG64})
+  else:
+    doAssert(opr1Type in {REG16, REG32})
+    
+  let size = typeToSize(opr1Type)
+  ctx.lit("lea", opr1, opr2, disp)
+  ctx.emit(0x8D, size, opr2, disp, opr1)
+      
+proc lea*(ctx: Assembler, opr, base, index: TReg, scale, disp: int) =  
+  let oprType = getRegType(opr)
+  let size = typeToSize(oprType)
+  if ctx.bits == BITS64:
+    doAssert(oprType in {REG16, REG32, REG64})
+  else:
+    doAssert(oprType in {REG16, REG32})
+  
+  ctx.lit("lea", opr, base, index, scale, disp)  
+  ctx.emit(0x8D, size, base, index, scale, disp, opr)
+
+proc lea*(ctx: Assembler, opr, index: TReg, scale, disp: int) =
+  ctx.lea(opr, NA, index, scale, disp)
+
+proc mov*(ctx: Assembler, opr1, opr2: TReg) =
+  ctx.lit("mov", opr1, opr2)
+  
+  let opr1Type = getRegType(opr1)
+  let opr2Type = getRegType(opr2)
+  var opCode = 0x88 + (opr1Type != REG8).int
+  
+  if opr2Type == REGSEG:
+    opCode = 0x8C
+    if ctx.bits == BITS64:
+      doAssert(opr1Type in {REG16, REG32, REG64})
+    else:
+      doAssert(opr1Type in {REG16, REG32})
+    let rtype = if opr1Type == REG64: REG32 else: opr1Type
+    ctx.emit(opCode, reg(getRegVal(opr1), rtype), opr2)
+    return
+  
+  if opr1Type == REGSEG:
+    opCode = 0x8E
+    if ctx.bits == BITS64:
+      doAssert(opr2Type in {REG16, REG32, REG64})
+    else:
+      doAssert(opr2Type in {REG16, REG32})
+    ctx.emit(opCode, reg(getRegVal(opr2), REG32), opr1)
+    return
+    
+  ctx.emit(opCode, opr1, opr2)
+  
+proc mov*(ctx: Assembler, size: oprSize, opr1: TReg, disp: int, opr2: TReg) =
+  var opCode = 0x88 + (size != BYTE).int
+  
+  if getRegType(opr2) == REGSEG:
+    opCode = 0x8C
+    if ctx.bits == BITS64:
+      doAssert(size in {WORD, QWORD})
+      doAssert(getRegType(opr1) in {REG32, REG64})
+    else:
+      doAssert(size == WORD)
+      doAssert(getRegType(opr1) == REG32)
+    ctx.lit("mov", size, opr1, disp, opr2)
+    ctx.emit(opCode, size, opr1, disp, opr2)
+    return
+  
+  ctx.stdRMREG("mov", opCode, size, opr1, disp, opr2)
+
+proc mov*(ctx: Assembler, opr1, opr2: TReg, size: oprSize, disp: int) =
+  var opCode = 0x8A + (size != BYTE).int
+  
+  if getRegType(opr1) == REGSEG:
+    opCode = 0x8E
+    if ctx.bits == BITS64:
+      doAssert(size in {WORD, QWORD})
+      doAssert(getRegType(opr2) in {REG32, REG64})
+    else:
+      doAssert(size == WORD)
+      doAssert(getRegType(opr2) == REG32)
+    ctx.lit("mov", opr1, opr2, size, disp)
+    ctx.emit(opCode, size, opr2, disp, opr1)
+    return
+  
+  ctx.stdREGRM("mov", opCode, opr1, opr2, size, disp)
+      
+proc mov*(ctx: Assembler, size: oprSize, base, index: TReg, scale, disp: int, opr2: TReg) =
+  var opCode = 0x88 + (size != BYTE).int
+  
+  if getRegType(opr2) == REGSEG:
+    opCode = 0x8C
+    if ctx.bits == BITS64:
+      doAssert(size in {WORD, QWORD})
+    else:
+      doAssert(size == WORD)
+    ctx.lit("mov", size, base, index, scale, disp, opr2)
+    ctx.emit(opCode, size, base, index, scale, disp, opr2)
+    return
+  
+  ctx.stdRMREG("mov", opCode, size, base, index, scale, disp, opr2)
+
+proc mov*[B: int | TReg](ctx: Assembler, size: oprSize, index: TReg, scale, disp: int, imm: B) =
+  ctx.mov(size, NA, index, scale, disp, imm)
+
+proc mov*(ctx: Assembler, opr1: TReg, size: oprSize, base, index: TReg, scale, disp: int) =
+  var opCode = 0x8A + (size != BYTE).int
+  
+  if getRegType(opr1) == REGSEG:
+    opCode = 0x8E
+    if ctx.bits == BITS64:
+      doAssert(size in {WORD, QWORD})
+    else:
+      doAssert(size == WORD)
+    ctx.lit("mov", opr1, size, base, index, scale, disp)
+    ctx.emit(opCode, size, base, index, scale, disp, opr1)
+    return
+    
+  ctx.stdREGRM("mov", opCode, opr1, size, base, index, scale, disp)
+
+proc mov*(ctx: Assembler, opr1: TReg, size: oprSize, index: TReg, scale, disp: int) =
+  ctx.mov(opr1, size, NA, index, scale, disp)
+
+proc mov*(ctx: Assembler, size: oprSize, opr: TReg, disp, imm: int) =
+  ctx.stdRMIMM("mov", 0xC6 + (size != BYTE).int, 0, size, opr, disp, imm)
+  
+proc mov*(ctx: Assembler, size: oprSize, base, index: TReg, scale, disp: int, imm: int) =
+  ctx.stdRMIMM("mov", 0xC6 + (size != BYTE).int, 0, size, base, index, scale, disp, imm)
+
+proc mov*(ctx: Assembler, opr: TReg, imm: int64) =
+  ctx.lit("mov", opr, imm)
+  var data = ""
+  var oprType = getRegType(opr)
+  let oprVal = getRegVal(opr)
+  let opCode = if oprType == REG8: 0xB0 else: 0xB8
+  
+  if ctx.bits == BITS32:
+    doAssert(oprVal < 0x08)
+    doAssert(oprType in {REG8, REG16, REG32})
+  else:
+    doAssert(oprType in {REG8, REG16, REG32, REG64})
+  
+  var rex = REX_BASE
+  var useREX = false
+  
+  if oprType == REG64:
+    if imm < 0xFFFFFFFF: oprType = REG32
+    
+  if oprType == REG16:
+    data.add chr(0x66)
+  elif oprType == REG64:
+    rex = rex or REX_W
+    useREX = true
+    
+  if oprVal >= 0x08:
+    rex = rex or REX_B
+    useREX = true
+    
+  if useREX: data.add chr(rex)
+  data.add chr(opCode + (oprVal and 0b0000_0111))
+  var inst = Instruction(data: data)
+  ctx.add inst
+
+  if oprType == REG8:
+    doAssert(imm <= 0xFF)
+    ctx.appendChar(chr(imm.int and 0xFF))
+  elif oprType == REG16:
+    doAssert(imm <= 0xFFFF)
+    ctx.appendWord(imm and 0xFFFF)
+  elif oprType == REG32:
+    doAssert(imm <= 0xFFFFFFFF)
+    ctx.appendDWord(imm and 0xFFFFFFFF)
+  else:
+    ctx.appendQWord(imm)
+    
+#all other moffset
 #xchg
-#lea
 #test
-#mov
+#mov rm, moffs
+#mov moffs, rm
+#imul reg, rm, imm
 #jmp

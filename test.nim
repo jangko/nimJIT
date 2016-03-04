@@ -48,7 +48,12 @@ proc close(ctx: TestContext) =
   ctx.nim.write "if execShellCmd(cmd) != 0: quit(-1)\n"
   ctx.nim.close()
 
-  var cmd = "nim c -d:release -o:njitasm.exe --verbosity:0 $1" % [ctx.nimName]
+  when defined(release):
+    let rel = "-d:release"
+  else:
+    let rel = ""
+    
+  var cmd = "nim c $1 -o:njitasm.exe --verbosity:0  --warning[SmallLshouldNotBeUsed]:off $2" % [rel, ctx.nimName]
   if execShellCmd(cmd) != 0: quit(-1)
 
   cmd = "njitasm njitasm.lst asm.asm"
@@ -105,7 +110,7 @@ macro beginTest(name: string, n: typed): stmt =
   #echo result.toStrLit.strVal
 
 include "test/singleop", "test/shiftgroup", "test/arithgroup",
-  "test/pushpopgroup"
+  "test/pushpopgroup", "test/lea", "test/mov"
 
 proc testSuite(bits: asmFlag) =
   var ctx = newTest(bits)
@@ -138,5 +143,8 @@ proc testSuite(bits: asmFlag) =
   #ctx.genPushPop("pop")
   #ctx.genPushPop("push")
 
+  #ctx.genLea("lea")
+  ctx.genMov("mov")
+  
 testSuite(BITS64)
 testSuite(BITS32)
